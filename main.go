@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	//go:embed grumpy-cat.png
+	//go:embed img/grumpy-cat.png
 	grumpyCat []byte
 
 	DrawRune = '*'
