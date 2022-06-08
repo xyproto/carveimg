@@ -2,7 +2,7 @@
 
 16 color image viewer for the terminal that uses [content aware image resizing](https://github.com/esimov/caire).
 
-I wanted to develop an image viewer that could be usable from within [`o`](https://github.com/xyproto/o), a little editor I wrote that targets VT100 compatible terminal emulators.
+I wanted to develop an image viewer that could be usable from within [`o`](https://github.com/xyproto/o), a small editor I wrote that targets VT100 compatible terminal emulators.
 
 The content-aware image resizing changes the image, but keeps the most interesting contents.
 
