@@ -8,7 +8,7 @@ Currently, it can only show one image, in 16 colors, using `*` as the "pixel". I
 
 ![grumpy cat](img/grumpy-cat.png)
 
-## Grumpy cat shown with `showyourself`
+## Grumpy cat on a VT100 terminal in 16 glorious colors
 
 ![grumpy terminal cat](img/grumpycat_showyourself.png)
 
