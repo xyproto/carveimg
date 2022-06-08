@@ -1,7 +1,7 @@
-image
 *.bak
 *.o
 *.tmp
 *.swp
 *~
 include.txt
+showyourself
