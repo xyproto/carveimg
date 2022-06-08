@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	_ "embed"
 	"errors"
 	"fmt"
@@ -15,13 +14,7 @@ import (
 	"github.com/xyproto/vt100"
 )
 
-var (
-	//go:embed img/grumpy-cat.png
-	grumpyCat []byte
-
-	//DrawRune = '*'
-	DrawRune = '█'
-)
+const drawRune = '▒'
 
 func convertToNRGBA(img image.Image) (*image.NRGBA, error) {
 	nImage := image.NewNRGBA(img.Bounds())
@@ -37,13 +30,14 @@ func convertToNRGBA(img image.Image) (*image.NRGBA, error) {
 	return nImage, nil
 }
 
-func LoadEmbeddedImage() (*image.NRGBA, error) {
-	if len(grumpyCat) == 0 {
-		return nil, errors.New("embed error: no data")
+func LoadImage(filename string) (*image.NRGBA, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, err
 	}
-	// Decode the image
-	reader := bytes.NewReader(grumpyCat)
-	img, err := png.Decode(reader)
+	defer f.Close()
+	// Read and decode the image
+	img, err := png.Decode(f)
 	if err != nil {
 		return nil, err
 	}
@@ -62,11 +56,10 @@ func Draw(canvas *vt100.Canvas, m image.Image) error {
 	}
 
 	// img is now an indexed image
-
+	var vc vt100.AttributeColor
 	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
 		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
 			c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
-			vc := vt100.White
 			for i, rgb := range palgen.BasicPalette16 {
 				if rgb[0] == c.R && rgb[1] == c.G && rgb[2] == c.B {
 					switch i {
@@ -102,17 +95,27 @@ func Draw(canvas *vt100.Canvas, m image.Image) error {
 						vc = vt100.LightCyan
 					case 15:
 						vc = vt100.White
+					default:
+						vc = vt100.White
 					}
+					break
 				}
 			}
-			// Draw the "pixel" on the canvas
-			canvas.PlotColor(uint(x), uint(y), vc, DrawRune)
+			// Draw the "pixel" on the canvas using the vc color and the draw rune
+			canvas.PlotColor(uint(x), uint(y), vc, drawRune)
 		}
 	}
 	return nil
 }
 
 func main() {
+	if len(os.Args) <= 1 {
+		fmt.Fprintln(os.Stderr, "Please supply a PNG filename")
+		os.Exit(1)
+	}
+
+	filename := os.Args[1]
+
 	// Initialize vt100 terminal settings
 	vt100.Init()
 
@@ -141,11 +144,11 @@ func main() {
 		//SeamColor:      "#ff0000",
 	}
 
-	// Load grumpy-cat.png that has been embedded into the executable
-	nImage, err := LoadEmbeddedImage()
+	// Load the given filename
+	nImage, err := LoadImage(filename)
 	if err != nil {
 		vt100.Close()
-		fmt.Fprintf(os.Stderr, "Could not decode grumpy-cat.png: %s\n", err)
+		fmt.Fprintf(os.Stderr, "Could not load %s: %s\n", filename, err)
 		os.Exit(1)
 	}
 
@@ -153,7 +156,7 @@ func main() {
 	resizedImage, err := p.Resize(nImage)
 	if err != nil {
 		vt100.Close()
-		fmt.Fprintf(os.Stderr, "Could not resize grumpy-cat.png: %s\n", err)
+		fmt.Fprintf(os.Stderr, "Could not resize image: %s\n", err)
 		os.Exit(1)
 
 	}
@@ -161,12 +164,12 @@ func main() {
 	// Draw the image to the canvas, using only the basic 16 colors
 	if err := Draw(c, resizedImage); err != nil {
 		vt100.Close()
-		fmt.Fprintln(os.Stderr, "Could not draw the image")
+		fmt.Fprintln(os.Stderr, "Could not draw image: %s\n", err)
 		os.Exit(1)
 	}
 
 	// Output the filename on top of the image
-	c.Write(10, 10, vt100.LightGreen, vt100.BackgroundDefault, "grumpy-cat.png")
+	//c.Write(10, 10, vt100.LightBlue, vt100.BackgroundDefault, filename)
 
 	// Draw the contents of the canvas to the screen
 	c.Draw()
