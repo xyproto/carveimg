@@ -10,10 +10,10 @@ The palette reduction is done with [`palgen`](https://github.com/xyproto/palgen)
 
 ## Comparison
 
-| PNG image               |          The same image in a VT100-compatible terminal emulator, using only 16 colors |
-|------------------------------|----------------------------------------------------------------------------------|
-| <img src=img/grumpycat.png width=512>|                            <img src=img/grumpycat16colors.png width=512> |
-| <img src=img/archbtw.png width=512>  |                              <img src=img/archbtw16colors.png width=512> |
+| PNG image                             |    In a VT100 compatible terminal emulator, using 16 colors |
+|---------------------------------------|-------------------------------------------------------------|
+| <img src=img/grumpycat.png width=512> |               <img src=img/grumpycat16colors.png width=512> |
+| <img src=img/archbtw.png width=512>   |                 <img src=img/archbtw16colors.png width=512> |
 
 ## Installation
 
