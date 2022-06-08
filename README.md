@@ -1,4 +1,4 @@
-# showyourself <img src=img/logo.png width=100>
+# :framed_picture: showyourself
 
 16 color image viewer for the terminal that uses [content aware image resizing](https://github.com/esimov/caire).
 
