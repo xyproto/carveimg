@@ -2,19 +2,19 @@
 
 16 color image viewer for the terminal that uses [content aware image resizing](https://github.com/esimov/caire).
 
-## Arch
+## An image
 
 ![arch](img/archbtw.png)
 
-## Arch in a VT100 terminal emulator in 16 colors
+## The context-aware resized image in a VT100 terminal emulator in 16 glorious colors
 
-![arch 16 colors](archbtw16colors.png)
+![arch 16 colors](img/archbtw16colors.png)
 
 ## A grumpy cat
 
 ![grumpy cat](img/grumpy-cat.png)
 
-## A grumpy cat in a VT100 terminal emulator in 16 colors
+## The same image as displayed with an early version of `showyourself`
 
 ![grumpy terminal cat](img/grumpycat_showyourself.png)
 
