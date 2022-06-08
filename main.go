@@ -30,6 +30,7 @@ func convertToNRGBA(img image.Image) (*image.NRGBA, error) {
 	return nImage, nil
 }
 
+// LoadImage loads a PNG image and converts it to *image.NRGBA
 func LoadImage(filename string) (*image.NRGBA, error) {
 	f, err := os.Open(filename)
 	if err != nil {
@@ -47,6 +48,7 @@ func LoadImage(filename string) (*image.NRGBA, error) {
 	return convertToNRGBA(img)
 }
 
+// Draw attempts to draw the given image.Image onto a VT100 Canvas
 func Draw(canvas *vt100.Canvas, m image.Image) error {
 	// Convert the image to only use the basic 16-color palette
 	img, err := palgen.ConvertBasic(m)
