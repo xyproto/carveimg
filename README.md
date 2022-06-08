@@ -12,7 +12,7 @@ Image viewer for the terminal that uses [content aware image resizing](https://g
 
 ## A grumpy cat in a VT100 terminal emulator in 16 colors
 
-![grumpy terminal cat](img/grumpycat_showyourself.png)
+![grumpy terminal cat](img/grumpycat_showyourself_2.png)
 
 ## Why?
 
