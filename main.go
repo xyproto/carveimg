@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	_ "embed"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -18,14 +19,39 @@ var (
 	grumpyCat []byte
 )
 
-func LoadEmbeddedImage() (image.Image, error) {
+func convertToNRGBA(img image.Image) (*image.NRGBA, error) {
+	nImage := image.NewNRGBA(img.Bounds())
+	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+			c, ok := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+			if !ok {
+				return nil, errors.New("could not convert color to NRGBA")
+			}
+			nImage.Set(x, y, c)
+			// 			r := int(c.R)
+			// 			g := int(c.G)
+			// 			b := int(c.B)
+			// 			alpha := int(c.A) // TODO: assume a black background and multiply in the alpha
+			// 			fmt.Println(r, g, b, alpha)
+		}
+	}
+	return nImage, nil
+}
+
+func LoadEmbeddedImage() (*image.NRGBA, error) {
+	if len(grumpyCat) == 0 {
+		return nil, errors.New("embed error: no data")
+	}
 	// Decode the image
 	reader := bytes.NewReader(grumpyCat)
 	img, err := png.Decode(reader)
 	if err != nil {
 		return nil, err
 	}
-	return img, nil
+	if nImage, ok := img.(*image.NRGBA); ok {
+		return nImage, nil
+	}
+	return convertToNRGBA(img)
 }
 
 func main() {
@@ -36,10 +62,10 @@ func main() {
 	c := vt100.NewCanvas()
 
 	// Find the width and height of the canvas
-	width := c.Width()
-	height := c.Height()
+	width := int(c.Width())
+	height := int(c.Height())
 
-	proc := &caire.Processor{
+	p := &caire.Processor{
 		BlurRadius:     4, // or ie. 1
 		SobelThreshold: 2, // or ie. 4
 		NewWidth:       width,
@@ -56,14 +82,10 @@ func main() {
 		//SeamColor:      "#ff0000",
 	}
 
-	if len(grumpyCat) == 0 {
-		fmt.Fprintln(os.Stderr, "Embed error")
-		os.Exit(1)
-	}
-
-	img, err := LoadEmbeddedImage()
+	nImage, err := LoadEmbeddedImage()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not decode grumpy-cat.png: %s\n\n", err.Error())
+		vt100.Close()
+		fmt.Fprintf(os.Stderr, "Could not decode grumpy-cat.png: %s\n\n", err)
 		os.Exit(1)
 	}
 
@@ -74,12 +96,18 @@ func main() {
 	// 		fmt.Fprintf(os.Stderr, "Could not process grumpy-cat.png: %s\n\n", err.Error())
 	// 		os.Exit(1)
 	// 	}
+	// 	p.Process(in, out)
 
-	resizedImage, err := proc.Resize(img)
+	fmt.Printf("IMAGE IS %T\n", nImage)
+
+	resizedImage, err := p.Resize(nImage)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not resize grumpy-cat.png: %s\n\n", err.Error())
+		vt100.Close()
+		fmt.Fprintf(os.Stderr, "Could not resize grumpy-cat.png: %s\n\n", err)
 		os.Exit(1)
 	}
+
+	fmt.Printf("RESIZED: %T\n", resizedImage)
 
 	c.Write(12, 12, vt100.LightGreen, vt100.BackgroundDefault, "grumpy-cat.png")
 
@@ -88,17 +116,17 @@ func main() {
 	// 		}
 	// 	}
 
-	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
-		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
-
-			c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
-			r := int(c.R)
-			g := int(c.G)
-			b := int(c.B)
-			alpha := int(c.A) // TODO: assume a black background and multiply in the alpha
-			fmt.Println(r, g, b, alpha)
-		}
-	}
+	// 	nImage := image.NewNRGBA(img.Bounds())
+	// 	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+	// 		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+	// 			c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+	// 			r := int(c.R)
+	// 			g := int(c.G)
+	// 			b := int(c.B)
+	// 			alpha := int(c.A) // TODO: assume a black background and multiply in the alpha
+	// 			fmt.Println(r, g, b, alpha)
+	// 		}
+	// 	}
 
 	// Draw things on the canvas
 	c.PlotColor(12, 17, vt100.LightRed, '*')
