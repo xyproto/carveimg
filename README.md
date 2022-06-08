@@ -8,8 +8,8 @@ I wanted to develop an image viewer that could be usable from within [`o`](https
 
 ## Features and limitations
 
-* The content-aware image resizing changes the image, but keeps the most interesting contents.
-* The palette reduction is done with [`palgen`](https://github.com/xyproto/palgen).
+* The content-aware image resizing changes the image, but keeps the most interesting content.
+* The palette reduction is done by [`palgen`](https://github.com/xyproto/palgen).
 
 ## Style comparison
 
