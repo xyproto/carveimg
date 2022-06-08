@@ -11,7 +11,7 @@ I wanted to develop an image viewer that could be usable from within [`o`](https
 * The content-aware image resizing changes the image, but keeps the most interesting content.
 * The palette reduction is done by [`palgen`](https://github.com/xyproto/palgen).
 
-## Style comparison
+## Comparison
 
 | PNG image                             |    In a VT100 compatible terminal emulator, using 16 colors |
 |---------------------------------------|-------------------------------------------------------------|
