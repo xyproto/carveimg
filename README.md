@@ -2,16 +2,16 @@
 
 16 color image viewer for the terminal that uses [content aware image resizing](https://github.com/esimov/caire).
 
-## An image
-
-| Original image               | Context-aware resized image in a VT100 terminal emulator in 16 glorious colors   |
-|------------------------------|----------------------------------------------------------------------------------|
-| ![before](img/archbtw.png)   |                                                ![after](img/archbtw16colors.png) |
-| ![before](img/grumpycat.png) |                                              ![after](img/grumpycat16colors.png) |
-
-## Why?
-
 I wanted to develop an image viewer that could be usable from within [`o`](https://github.com/xyproto/o), a little editor I wrote that targets VT100 compatible terminal emulators.
+
+The content-aware image resizing changes the image, but keeps the most interesting contents.
+
+## Comparison
+
+| PNG image               |          The same image in a VT100-compatible terminal emulator, using only 16 colors |
+|------------------------------|----------------------------------------------------------------------------------|
+| <img src=img/grumpycat.png width=512>|                            <img src=img/grumpycat16colors.png width=512> |
+| <img src=img/archbtw.png width=512>  |                              <img src=img/archbtw16colors.png width=512> |
 
 ## General info
 
