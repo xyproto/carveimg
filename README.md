@@ -14,7 +14,7 @@ Image viewer for the terminal that uses [content aware image resizing](https://g
 
 ![grumpy terminal cat](img/grumpycat_showyourself.png)
 
-## Same as above, but drawn with `█` instead of `*`
+## Same as above, but with `█` instead of `*`
 
 ![grumpy terminal cat](img/grumpycat_showyourself_2.png)
 
