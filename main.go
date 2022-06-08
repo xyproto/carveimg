@@ -19,8 +19,8 @@ var (
 	//go:embed img/grumpy-cat.png
 	grumpyCat []byte
 
-	DrawRune = '*'
-	//DrawRune = '█'
+	//DrawRune = '*'
+	DrawRune = '█'
 )
 
 func convertToNRGBA(img image.Image) (*image.NRGBA, error) {
