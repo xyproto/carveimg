@@ -4,23 +4,10 @@
 
 ## An image
 
-![arch](img/archbtw.png)
-
-## The context-aware resized image in a VT100 terminal emulator in 16 glorious colors
-
-![arch 16 colors](img/archbtw16colors.png)
-
-## A grumpy cat
-
-![grumpy cat](img/grumpy-cat.png)
-
-## The same image as displayed with an early version of `showyourself`
-
-![grumpy terminal cat](img/grumpycat_showyourself.png)
-
-## Same as above, but drawn with `█` instead of `*`
-
-![grumpy terminal cat](img/grumpycat_showyourself_2.png)
+| Original image               | Context-aware resized image in a VT100 terminal emulator in 16 glorious colors   |
+|------------------------------|----------------------------------------------------------------------------------|
+| ![before](img/archbtw.png)   |                                                ![after](img/archbtw16colors.png) |
+| ![before](img/grumpycat.png) |                                              ![after](img/grumpycat16colors.png) |
 
 ## Why?
 
@@ -28,6 +15,6 @@ I wanted to develop an image viewer that could be usable from within [`o`](https
 
 ## General info
 
-* Version: 0.0.0
+* Version: 1.0.0
 * License: BSD-3
 * Author: Alexander F. Rødseth &lt;xyproto@archlinux.org&gt;
