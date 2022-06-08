@@ -4,7 +4,7 @@
 
 ## Why
 
-I wanted to develop an image viewer that could be usable from within [`o`](https://github.com/xyproto/o), a small editor I wrote that targets VT100 compatible terminal emulators.
+I wanted to develop an image viewer that could be usable from within [`o`](https://github.com/xyproto/o), a small editor/IDE I wrote that targets VT100 compatible terminal emulators.
 
 ## Features and limitations
 
