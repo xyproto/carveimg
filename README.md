@@ -1,5 +1,5 @@
 # showyourself
 
-PNG viewer for the terminal.
+An PNG viewer for the terminal, using content aware image resizing.
 
-# WORK IN PrOGRESS
+# A WORK IN PROGRESS
