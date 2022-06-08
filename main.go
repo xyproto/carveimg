@@ -11,6 +11,7 @@ import (
 	"os"
 
 	"github.com/esimov/caire"
+	"github.com/xyproto/palgen"
 	"github.com/xyproto/vt100"
 )
 
@@ -54,6 +55,31 @@ func LoadEmbeddedImage() (*image.NRGBA, error) {
 	return convertToNRGBA(img)
 }
 
+func Draw(canvas *vt100.Canvas, m image.Image) error {
+	// Convert the image to only use the basic 16-color palette
+	img, err := palgen.ConvertBasic(m)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %s\n", err)
+		os.Exit(1)
+	}
+
+	// img is now an indexed image
+	fmt.Printf("img after converting to 16-colors: %T\n", img)
+
+	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+			c, ok := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+			if !ok {
+				errors.New("could not convert color to NRGBA")
+			}
+			_ = c
+			// Draw things on the canvas
+			canvas.PlotColor(uint(x), uint(y), vt100.LightRed, '.') // TODO: Use the correct vt100 color based on perhaps the img.At(x, y) color index?
+		}
+	}
+	return nil
+}
+
 func main() {
 	// Initialize vt100 terminal settings
 	vt100.Init()
@@ -85,7 +111,7 @@ func main() {
 	nImage, err := LoadEmbeddedImage()
 	if err != nil {
 		vt100.Close()
-		fmt.Fprintf(os.Stderr, "Could not decode grumpy-cat.png: %s\n\n", err)
+		fmt.Fprintf(os.Stderr, "Could not decode grumpy-cat.png: %s\n", err)
 		os.Exit(1)
 	}
 
@@ -93,7 +119,7 @@ func main() {
 	// 	reader := bytes.NewReader(grumpyCat)
 	// 	err := proc.Process(&buf, reader)
 	// 	if err != nil {
-	// 		fmt.Fprintf(os.Stderr, "Could not process grumpy-cat.png: %s\n\n", err.Error())
+	// 		fmt.Fprintf(os.Stderr, "Could not process grumpy-cat.png: %s\n", err.Error())
 	// 		os.Exit(1)
 	// 	}
 	// 	p.Process(in, out)
@@ -103,11 +129,18 @@ func main() {
 	resizedImage, err := p.Resize(nImage)
 	if err != nil {
 		vt100.Close()
-		fmt.Fprintf(os.Stderr, "Could not resize grumpy-cat.png: %s\n\n", err)
+		fmt.Fprintf(os.Stderr, "Could not resize grumpy-cat.png: %s\n", err)
 		os.Exit(1)
+
 	}
 
 	fmt.Printf("RESIZED: %T\n", resizedImage)
+
+	if err := Draw(c, resizedImage); err != nil {
+		vt100.Close()
+		fmt.Fprintln(os.Stderr, "Could not draw the image")
+		os.Exit(1)
+	}
 
 	c.Write(12, 12, vt100.LightGreen, vt100.BackgroundDefault, "grumpy-cat.png")
 
@@ -127,9 +160,6 @@ func main() {
 	// 			fmt.Println(r, g, b, alpha)
 	// 		}
 	// 	}
-
-	// Draw things on the canvas
-	c.PlotColor(12, 17, vt100.LightRed, '*')
 
 	// Draw the contents of the canvas
 	c.Draw()
