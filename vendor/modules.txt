@@ -65,7 +65,7 @@ github.com/lucasb-eyer/go-colorful
 ## explicit; go 1.14
 github.com/pkg/term
 github.com/pkg/term/termios
-# github.com/xyproto/palgen v1.1.0
+# github.com/xyproto/palgen v1.2.0
 ## explicit; go 1.10
 github.com/xyproto/palgen
 # github.com/xyproto/vt100 v1.10.3

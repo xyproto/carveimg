@@ -4,7 +4,7 @@ go 1.18
 
 require (
 	github.com/esimov/caire v1.4.4
-	github.com/xyproto/palgen v1.1.0
+	github.com/xyproto/palgen v1.2.0
 	github.com/xyproto/vt100 v1.10.3
 )
 
