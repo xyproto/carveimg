@@ -267,41 +267,33 @@ func convertKeysym(s C.xkb_keysym_t) (string, bool) {
 	case C.XKB_KEY_Page_Down:
 		n = key.NamePageDown
 	case C.XKB_KEY_F1:
-		n = key.NameF1
+		n = "F1"
 	case C.XKB_KEY_F2:
-		n = key.NameF2
+		n = "F2"
 	case C.XKB_KEY_F3:
-		n = key.NameF3
+		n = "F3"
 	case C.XKB_KEY_F4:
-		n = key.NameF4
+		n = "F4"
 	case C.XKB_KEY_F5:
-		n = key.NameF5
+		n = "F5"
 	case C.XKB_KEY_F6:
-		n = key.NameF6
+		n = "F6"
 	case C.XKB_KEY_F7:
-		n = key.NameF7
+		n = "F7"
 	case C.XKB_KEY_F8:
-		n = key.NameF8
+		n = "F8"
 	case C.XKB_KEY_F9:
-		n = key.NameF9
+		n = "F9"
 	case C.XKB_KEY_F10:
-		n = key.NameF10
+		n = "F10"
 	case C.XKB_KEY_F11:
-		n = key.NameF11
+		n = "F11"
 	case C.XKB_KEY_F12:
-		n = key.NameF12
+		n = "F12"
 	case C.XKB_KEY_Tab, C.XKB_KEY_KP_Tab, C.XKB_KEY_ISO_Left_Tab:
 		n = key.NameTab
 	case 0x20, C.XKB_KEY_KP_Space:
 		n = key.NameSpace
-	case C.XKB_KEY_Control_L, C.XKB_KEY_Control_R:
-		n = key.NameCtrl
-	case C.XKB_KEY_Shift_L, C.XKB_KEY_Shift_R:
-		n = key.NameShift
-	case C.XKB_KEY_Alt_L, C.XKB_KEY_Alt_R:
-		n = key.NameAlt
-	case C.XKB_KEY_Super_L, C.XKB_KEY_Super_R:
-		n = key.NameSuper
 	default:
 		return "", false
 	}

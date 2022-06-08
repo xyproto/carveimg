@@ -19,22 +19,25 @@ type Animation struct {
 	v0 float32
 }
 
+var (
+	// Pixels/second.
+	minFlingVelocity = unit.Dp(50)
+	maxFlingVelocity = unit.Dp(8000)
+)
+
 const (
-	// dp/second.
-	minFlingVelocity  = unit.Dp(50)
-	maxFlingVelocity  = unit.Dp(8000)
 	thresholdVelocity = 1
 )
 
 // Start a fling given a starting velocity. Returns whether a
 // fling was started.
 func (f *Animation) Start(c unit.Metric, now time.Time, velocity float32) bool {
-	min := float32(c.Dp(minFlingVelocity))
+	min := float32(c.Px(minFlingVelocity))
 	v := velocity
 	if -min <= v && v <= min {
 		return false
 	}
-	max := float32(c.Dp(maxFlingVelocity))
+	max := float32(c.Px(maxFlingVelocity))
 	if v > max {
 		v = max
 	} else if v < -max {

@@ -51,7 +51,7 @@ func (h *Hover) Hovered(q event.Queue) bool {
 			continue
 		}
 		switch e.Type {
-		case pointer.Leave, pointer.Cancel:
+		case pointer.Leave:
 			if h.entered && h.pid == e.PointerID {
 				h.entered = false
 			}
@@ -78,9 +78,7 @@ type Click struct {
 	clicks int
 	// pressed tracks whether the pointer is pressed.
 	pressed bool
-	// hovered tracks whether the pointer is inside the gesture.
-	hovered bool
-	// entered tracks whether an Enter event has been received.
+	// entered tracks whether the pointer is inside the gesture.
 	entered bool
 	// pid is the pointer.ID.
 	pid pointer.ID
@@ -91,7 +89,7 @@ type Click struct {
 // TypeClick for a completed click.
 type ClickEvent struct {
 	Type      ClickType
-	Position  image.Point
+	Position  f32.Point
 	Source    pointer.Source
 	Modifiers key.Modifiers
 	// NumClicks records successive clicks occurring
@@ -157,7 +155,7 @@ const (
 	StateFlinging
 )
 
-const touchSlop = unit.Dp(3)
+var touchSlop = unit.Dp(3)
 
 // Add the handler to the operation list to receive click events.
 func (c *Click) Add(ops *op.Ops) {
@@ -169,7 +167,7 @@ func (c *Click) Add(ops *op.Ops) {
 
 // Hovered returns whether a pointer is inside the area.
 func (c *Click) Hovered() bool {
-	return c.hovered
+	return c.entered
 }
 
 // Pressed returns whether a pointer is pressing.
@@ -191,21 +189,20 @@ func (c *Click) Events(q event.Queue) []ClickEvent {
 				break
 			}
 			c.pressed = false
-			if !c.entered || c.hovered {
+			if c.entered {
 				if e.Time-c.clickedAt < doubleClickDuration {
 					c.clicks++
 				} else {
 					c.clicks = 1
 				}
 				c.clickedAt = e.Time
-				events = append(events, ClickEvent{Type: TypeClick, Position: e.Position.Round(), Source: e.Source, Modifiers: e.Modifiers, NumClicks: c.clicks})
+				events = append(events, ClickEvent{Type: TypeClick, Position: e.Position, Source: e.Source, Modifiers: e.Modifiers, NumClicks: c.clicks})
 			} else {
 				events = append(events, ClickEvent{Type: TypeCancel})
 			}
 		case pointer.Cancel:
 			wasPressed := c.pressed
 			c.pressed = false
-			c.hovered = false
 			c.entered = false
 			if wasPressed {
 				events = append(events, ClickEvent{Type: TypeCancel})
@@ -217,27 +214,26 @@ func (c *Click) Events(q event.Queue) []ClickEvent {
 			if e.Source == pointer.Mouse && e.Buttons != pointer.ButtonPrimary {
 				break
 			}
-			if !c.hovered {
+			if !c.entered {
 				c.pid = e.PointerID
 			}
 			if c.pid != e.PointerID {
 				break
 			}
 			c.pressed = true
-			events = append(events, ClickEvent{Type: TypePress, Position: e.Position.Round(), Source: e.Source, Modifiers: e.Modifiers})
+			events = append(events, ClickEvent{Type: TypePress, Position: e.Position, Source: e.Source, Modifiers: e.Modifiers})
 		case pointer.Leave:
 			if !c.pressed {
 				c.pid = e.PointerID
 			}
 			if c.pid == e.PointerID {
-				c.hovered = false
+				c.entered = false
 			}
 		case pointer.Enter:
 			if !c.pressed {
 				c.pid = e.PointerID
 			}
 			if c.pid == e.PointerID {
-				c.hovered = true
 				c.entered = true
 			}
 		}
@@ -248,8 +244,6 @@ func (c *Click) Events(q event.Queue) []ClickEvent {
 func (ClickEvent) ImplementsEvent() {}
 
 // Add the handler to the operation list to receive scroll events.
-// The bounds variable refers to the scrolling boundaries
-// as defined in io/pointer.InputOp.
 func (s *Scroll) Add(ops *op.Ops, bounds image.Rectangle) {
 	oph := pointer.InputOp{
 		Tag:          s,
@@ -303,7 +297,7 @@ func (s *Scroll) Scroll(cfg unit.Metric, q event.Queue, t time.Time, axis Axis) 
 				break
 			}
 			fling := s.estimator.Estimate()
-			if slop, d := float32(cfg.Dp(touchSlop)), fling.Distance; d < -slop || d > slop {
+			if slop, d := float32(cfg.Px(touchSlop)), fling.Distance; d < -slop || d > slop {
 				s.flinger.Start(cfg, t, fling.Velocity)
 			}
 			fallthrough
@@ -329,7 +323,7 @@ func (s *Scroll) Scroll(cfg unit.Metric, q event.Queue, t time.Time, axis Axis) 
 			v := int(math.Round(float64(val)))
 			dist := s.last - v
 			if e.Priority < pointer.Grabbed {
-				slop := cfg.Dp(touchSlop)
+				slop := cfg.Px(touchSlop)
 				if dist := dist; dist >= slop || -slop >= dist {
 					s.grab = true
 				}
@@ -407,7 +401,7 @@ func (d *Drag) Events(cfg unit.Metric, q event.Queue, axis Axis) []pointer.Event
 			}
 			if e.Priority < pointer.Grabbed {
 				diff := e.Position.Sub(d.start)
-				slop := cfg.Dp(touchSlop)
+				slop := cfg.Px(touchSlop)
 				if diff.X*diff.X+diff.Y*diff.Y > float32(slop*slop) {
 					d.grab = true
 				}

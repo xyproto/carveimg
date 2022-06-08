@@ -64,7 +64,6 @@ extern const struct wl_registry_listener gio_registry_listener;
 extern const struct wl_surface_listener gio_surface_listener;
 extern const struct xdg_surface_listener gio_xdg_surface_listener;
 extern const struct xdg_toplevel_listener gio_xdg_toplevel_listener;
-extern const struct zxdg_toplevel_decoration_v1_listener gio_zxdg_toplevel_decoration_v1_listener;
 extern const struct xdg_wm_base_listener gio_xdg_wm_base_listener;
 extern const struct wl_callback_listener gio_callback_listener;
 extern const struct wl_output_listener gio_output_listener;
@@ -150,7 +149,6 @@ type repeatState struct {
 type window struct {
 	w          *callbacks
 	disp       *wlDisplay
-	seat       *wlSeat
 	surf       *C.struct_wl_surface
 	wmSurf     *C.struct_xdg_surface
 	topLvl     *C.struct_xdg_toplevel
@@ -184,17 +182,14 @@ type window struct {
 	lastFrameCallback *C.struct_wl_callback
 
 	animating bool
-	redraw    bool
+	needAck   bool
 	// The most recent configure serial waiting to be ack'ed.
-	serial C.uint32_t
-	scale  int
+	serial   C.uint32_t
+	newScale bool
+	scale    int
 	// size is the unscaled window size (unlike config.Size which is scaled).
-	size         image.Point
-	config       Config
-	wsize        image.Point // window config size before going fullscreen or maximized
-	inCompositor bool        // window is moving or being resized
-
-	clipReads chan clipboard.Event
+	size   image.Point
+	config Config
 
 	wakeups chan struct{}
 }
@@ -216,7 +211,7 @@ type wlOutput struct {
 }
 
 // callbackMap maps Wayland native handles to corresponding Go
-// references. It is necessary because the Wayland client API
+// references. It is necessary because the the Wayland client API
 // forces the use of callbacks and storing pointers to Go values
 // in C is forbidden.
 var callbackMap sync.Map
@@ -248,21 +243,14 @@ func newWLWindow(callbacks *callbacks, options []Option) error {
 	go func() {
 		defer d.destroy()
 		defer w.destroy()
-
-		w.w.SetDriver(w)
-
 		// Finish and commit setup from createNativeWindow.
 		w.Configure(options)
 		C.wl_surface_commit(w.surf)
 
-		w.w.Event(WaylandViewEvent{
-			Display: unsafe.Pointer(w.display()),
-			Surface: unsafe.Pointer(w.surf),
-		})
-
-		err := w.loop()
-		w.w.Event(WaylandViewEvent{})
-		w.w.Event(system.DestroyEvent{Err: err})
+		w.w.SetDriver(w)
+		if err := w.loop(); err != nil {
+			panic(err)
+		}
 	}()
 	return nil
 }
@@ -334,19 +322,18 @@ func (d *wlDisplay) createNativeWindow(options []Option) (*window, error) {
 	ppdp := detectUIScale()
 
 	w := &window{
-		disp:      d,
-		scale:     scale,
-		ppdp:      ppdp,
-		ppsp:      ppdp,
-		wakeups:   make(chan struct{}, 1),
-		clipReads: make(chan clipboard.Event, 1),
+		disp:     d,
+		scale:    scale,
+		newScale: scale != 1,
+		ppdp:     ppdp,
+		ppsp:     ppdp,
+		wakeups:  make(chan struct{}, 1),
 	}
 	w.surf = C.wl_compositor_create_surface(d.compositor)
 	if w.surf == nil {
 		w.destroy()
 		return nil, errors.New("wayland: wl_compositor_create_surface failed")
 	}
-	C.wl_surface_set_buffer_scale(w.surf, C.int32_t(w.scale))
 	callbackStore(unsafe.Pointer(w.surf), w)
 	w.wmSurf = C.xdg_wm_base_get_xdg_surface(d.wm, w.surf)
 	if w.wmSurf == nil {
@@ -381,8 +368,9 @@ func (d *wlDisplay) createNativeWindow(options []Option) (*window, error) {
 	C.xdg_toplevel_add_listener(w.topLvl, &C.gio_xdg_toplevel_listener, unsafe.Pointer(w.surf))
 
 	if d.decor != nil {
+		// Request server side decorations.
 		w.decor = C.zxdg_decoration_manager_v1_get_toplevel_decoration(d.decor, w.topLvl)
-		C.zxdg_toplevel_decoration_v1_add_listener(w.decor, &C.gio_zxdg_toplevel_decoration_v1_listener, unsafe.Pointer(w.surf))
+		C.zxdg_toplevel_decoration_v1_set_mode(w.decor, C.ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE)
 	}
 	w.updateOpaqueRegion()
 	return w, nil
@@ -492,9 +480,9 @@ func gio_onSeatName(data unsafe.Pointer, seat *C.struct_wl_seat, name *C.char) {
 func gio_onXdgSurfaceConfigure(data unsafe.Pointer, wmSurf *C.struct_xdg_surface, serial C.uint32_t) {
 	w := callbackLoad(data).(*window)
 	w.serial = serial
-	w.redraw = true
-	C.xdg_surface_ack_configure(wmSurf, serial)
+	w.needAck = true
 	w.setStage(system.StageRunning)
+	w.draw(true)
 }
 
 //export gio_onToplevelClose
@@ -509,22 +497,6 @@ func gio_onToplevelConfigure(data unsafe.Pointer, topLvl *C.struct_xdg_toplevel,
 	if width != 0 && height != 0 {
 		w.size = image.Pt(int(width), int(height))
 		w.updateOpaqueRegion()
-	}
-}
-
-//export gio_onToplevelDecorationConfigure
-func gio_onToplevelDecorationConfigure(data unsafe.Pointer, deco *C.struct_zxdg_toplevel_decoration_v1, mode C.uint32_t) {
-	w := callbackLoad(data).(*window)
-	decorated := w.config.Decorated
-	switch mode {
-	case C.ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE:
-		w.config.Decorated = false
-	case C.ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE:
-		w.config.Decorated = true
-	}
-	if decorated != w.config.Decorated {
-		w.w.Event(ConfigEvent{Config: w.config})
-		w.redraw = true
 	}
 }
 
@@ -560,7 +532,7 @@ func gio_onOutputDone(data unsafe.Pointer, output *C.struct_wl_output) {
 	d := callbackLoad(data).(*wlDisplay)
 	conf := d.outputConfig[output]
 	for _, w := range conf.windows {
-		w.redraw = true
+		w.draw(true)
 	}
 }
 
@@ -579,11 +551,6 @@ func gio_onSurfaceEnter(data unsafe.Pointer, surf *C.struct_wl_surface, output *
 		conf.windows = append(conf.windows, w)
 	}
 	w.updateOutputs()
-	if w.config.Mode == Minimized {
-		// Minimized window got brought back up: it is no longer so.
-		w.config.Mode = Windowed
-		w.w.Event(ConfigEvent{Config: w.config})
-	}
 }
 
 //export gio_onSurfaceLeave
@@ -799,22 +766,15 @@ func gio_onPointerEnter(data unsafe.Pointer, pointer *C.struct_wl_pointer, seria
 	s := callbackLoad(data).(*wlSeat)
 	s.serial = serial
 	w := callbackLoad(unsafe.Pointer(surf)).(*window)
-	w.seat = s
 	s.pointerFocus = w
 	w.setCursor(pointer, serial)
 	w.lastPos = f32.Point{X: fromFixed(x), Y: fromFixed(y)}
 }
 
 //export gio_onPointerLeave
-func gio_onPointerLeave(data unsafe.Pointer, p *C.struct_wl_pointer, serial C.uint32_t, surf *C.struct_wl_surface) {
-	w := callbackLoad(unsafe.Pointer(surf)).(*window)
-	w.seat = nil
+func gio_onPointerLeave(data unsafe.Pointer, p *C.struct_wl_pointer, serial C.uint32_t, surface *C.struct_wl_surface) {
 	s := callbackLoad(data).(*wlSeat)
 	s.serial = serial
-	if w.inCompositor {
-		w.inCompositor = false
-		w.w.Event(pointer.Event{Type: pointer.Cancel})
-	}
 }
 
 //export gio_onPointerMotion
@@ -852,8 +812,6 @@ func gio_onPointerButton(data unsafe.Pointer, p *C.struct_wl_pointer, serial, t,
 	case 0:
 		w.pointerBtns &^= btn
 		typ = pointer.Release
-		// Move or resize gestures no longer applies.
-		w.inCompositor = false
 	case 1:
 		w.pointerBtns |= btn
 		typ = pointer.Press
@@ -948,8 +906,7 @@ func (w *window) ReadClipboard() {
 	go func() {
 		defer r.Close()
 		data, _ := ioutil.ReadAll(r)
-		w.clipReads <- clipboard.Event{Text: string(data)}
-		w.Wakeup()
+		w.w.Event(clipboard.Event{Text: string(data)})
 	}()
 }
 
@@ -962,146 +919,54 @@ func (w *window) Configure(options []Option) {
 	prev := w.config
 	cnf := w.config
 	cnf.apply(cfg, options)
-
-	switch cnf.Mode {
-	case Fullscreen:
-		switch prev.Mode {
-		case Minimized, Fullscreen:
-		default:
-			w.config.Mode = Fullscreen
-			w.wsize = w.config.Size
-			C.xdg_toplevel_set_fullscreen(w.topLvl, nil)
-		}
-	case Minimized:
-		switch prev.Mode {
-		case Minimized, Fullscreen:
-		default:
-			w.config.Mode = Minimized
-			C.xdg_toplevel_set_minimized(w.topLvl)
-		}
-	case Maximized:
-		switch prev.Mode {
-		case Minimized, Fullscreen:
-		default:
-			w.config.Mode = Maximized
-			w.wsize = w.config.Size
-			C.xdg_toplevel_set_maximized(w.topLvl)
-			w.setTitle(prev, cnf)
-		}
-	case Windowed:
-		switch prev.Mode {
-		case Fullscreen:
-			w.config.Mode = Windowed
-			w.size = w.wsize.Div(w.scale)
-			C.xdg_toplevel_unset_fullscreen(w.topLvl)
-		case Minimized:
-			w.config.Mode = Windowed
-		case Maximized:
-			w.config.Mode = Windowed
-			w.size = w.wsize.Div(w.scale)
-			C.xdg_toplevel_unset_maximized(w.topLvl)
-		}
-		w.setTitle(prev, cnf)
-		if prev.Size != cnf.Size {
-			w.config.Size = cnf.Size
-			w.size = cnf.Size.Div(w.scale)
-		}
-		if prev.MinSize != cnf.MinSize {
-			w.config.MinSize = cnf.MinSize
-			C.xdg_toplevel_set_min_size(w.topLvl, C.int32_t(cnf.MinSize.X), C.int32_t(cnf.MinSize.Y))
-		}
-		if prev.MaxSize != cnf.MaxSize {
-			w.config.MaxSize = cnf.MaxSize
-			C.xdg_toplevel_set_max_size(w.topLvl, C.int32_t(cnf.MaxSize.X), C.int32_t(cnf.MaxSize.Y))
-		}
+	if prev.Size != cnf.Size {
+		w.size = image.Pt(cnf.Size.X/w.scale, cnf.Size.Y/w.scale)
+		w.config.Size = cnf.Size
 	}
-	if cnf.Decorated != prev.Decorated {
-		w.config.Decorated = cnf.Decorated
-	}
-	if w.config != prev {
-		w.w.Event(ConfigEvent{Config: w.config})
-	}
-}
-
-func (w *window) setTitle(prev, cnf Config) {
 	if prev.Title != cnf.Title {
 		w.config.Title = cnf.Title
 		title := C.CString(cnf.Title)
 		C.xdg_toplevel_set_title(w.topLvl, title)
 		C.free(unsafe.Pointer(title))
 	}
-}
-
-func (w *window) Perform(actions system.Action) {
-	// NB. there is no way for a minimized window to be unminimized.
-	// https://wayland.app/protocols/xdg-shell#xdg_toplevel:request:set_minimized
-	walkActions(actions, func(action system.Action) {
-		switch action {
-		case system.ActionMove:
-			w.move()
-		default:
-			w.resize(action)
-		}
-	})
-}
-
-func (w *window) move() {
-	if !w.inCompositor && w.seat != nil {
-		w.inCompositor = true
-		s := w.seat
-		C.xdg_toplevel_move(w.topLvl, s.seat, s.serial)
+	if w.config != prev {
+		w.w.Event(ConfigEvent{Config: w.config})
 	}
 }
 
-func (w *window) resize(a system.Action) {
-	if w.inCompositor || w.seat == nil {
+func (w *window) Raise() {}
+
+func (w *window) SetCursor(name pointer.CursorName) {
+	if name == pointer.CursorNone {
+		C.wl_pointer_set_cursor(w.disp.seat.pointer, w.serial, nil, 0, 0)
 		return
 	}
-	var edge int
-	switch a {
-	case system.ActionResizeNorth:
-		edge = C.XDG_TOPLEVEL_RESIZE_EDGE_TOP
-	case system.ActionResizeSouth:
-		edge = C.XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM
-	case system.ActionResizeEast:
-		edge = C.XDG_TOPLEVEL_RESIZE_EDGE_LEFT
-	case system.ActionResizeWest:
-		edge = C.XDG_TOPLEVEL_RESIZE_EDGE_RIGHT
-	case system.ActionResizeNorthWest:
-		edge = C.XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT
-	case system.ActionResizeNorthEast:
-		edge = C.XDG_TOPLEVEL_RESIZE_EDGE_TOP_RIGHT
-	case system.ActionResizeSouthEast:
-		edge = C.XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT
-	case system.ActionResizeSouthWest:
-		edge = C.XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_LEFT
+	switch name {
 	default:
-		return
+		fallthrough
+	case pointer.CursorDefault:
+		name = "left_ptr"
+	case pointer.CursorText:
+		name = "xterm"
+	case pointer.CursorPointer:
+		name = "hand1"
+	case pointer.CursorCrossHair:
+		name = "crosshair"
+	case pointer.CursorRowResize:
+		name = "top_side"
+	case pointer.CursorColResize:
+		name = "left_side"
+	case pointer.CursorGrab:
+		name = "hand1"
 	}
-	w.inCompositor = true
-	s := w.seat
-	C.xdg_toplevel_resize(w.topLvl, s.seat, s.serial, C.uint32_t(edge))
-}
-
-func (w *window) SetCursor(cursor pointer.Cursor) {
-	ptr := w.disp.seat.pointer
-	if ptr == nil {
-		return
-	}
-	if cursor == pointer.CursorNone {
-		C.wl_pointer_set_cursor(ptr, w.serial, nil, 0, 0)
-		return
-	}
-
-	xcursor := xCursor[cursor]
-	cname := C.CString(xcursor)
+	cname := C.CString(string(name))
 	defer C.free(unsafe.Pointer(cname))
 	c := C.wl_cursor_theme_get_cursor(w.cursor.theme, cname)
 	if c == nil {
 		return
 	}
 	w.cursor.cursor = c
-	w.setCursor(ptr, w.serial)
+	w.setCursor(w.disp.seat.pointer, w.serial)
 }
 
 func (w *window) setCursor(pointer *C.struct_wl_pointer, serial C.uint32_t) {
@@ -1167,12 +1032,7 @@ func gio_onKeyboardKey(data unsafe.Pointer, keyboard *C.struct_wl_keyboard, seri
 	kc := mapXKBKeycode(uint32(keyCode))
 	ks := mapXKBKeyState(uint32(state))
 	for _, e := range w.disp.xkb.DispatchKey(kc, ks) {
-		if ee, ok := e.(key.EditEvent); ok {
-			// There's no support for IME yet.
-			w.w.EditorInsert(ee.Text)
-		} else {
-			w.w.Event(e)
-		}
+		w.w.Event(e)
 	}
 	if state != C.WL_KEYBOARD_KEY_STATE_PRESSED {
 		return
@@ -1262,12 +1122,7 @@ func (r *repeatState) Repeat(d *wlDisplay) {
 			break
 		}
 		for _, e := range d.xkb.DispatchKey(r.key, key.Press) {
-			if ee, ok := e.(key.EditEvent); ok {
-				// There's no support for IME yet.
-				r.win.EditorInsert(ee.Text)
-			} else {
-				r.win.Event(e)
-			}
+			r.win.Event(e)
 		}
 		r.last += delay
 	}
@@ -1279,6 +1134,7 @@ func gio_onFrameDone(data unsafe.Pointer, callback *C.struct_wl_callback, t C.ui
 	w := callbackLoad(data).(*window)
 	if w.lastFrameCallback == callback {
 		w.lastFrameCallback = nil
+		w.draw(false)
 	}
 }
 
@@ -1289,16 +1145,16 @@ func (w *window) loop() error {
 			return err
 		}
 		select {
-		case e := <-w.clipReads:
-			w.w.Event(e)
 		case <-w.wakeups:
 			w.w.Event(wakeupEvent{})
 		default:
 		}
 		if w.dead {
+			w.w.Event(system.DestroyEvent{})
 			break
 		}
-		w.draw()
+		// pass false to skip unnecessary drawing.
+		w.draw(false)
 	}
 	return nil
 }
@@ -1545,13 +1401,13 @@ func (w *window) updateOutputs() {
 	}
 	if found && scale != w.scale {
 		w.scale = scale
-		C.wl_surface_set_buffer_scale(w.surf, C.int32_t(w.scale))
+		w.newScale = true
 	}
 	if !found {
 		w.setStage(system.StagePaused)
 	} else {
 		w.setStage(system.StageRunning)
-		w.redraw = true
+		w.draw(true)
 	}
 }
 
@@ -1563,25 +1419,22 @@ func (w *window) getConfig() (image.Point, unit.Metric) {
 	}
 }
 
-func (w *window) draw() {
+func (w *window) draw(sync bool) {
 	w.flushScroll()
-	size, cfg := w.getConfig()
-	if cfg == (unit.Metric{}) {
+	anim := w.animating || w.fling.anim.Active()
+	dead := w.dead
+	if dead || (!anim && !sync) {
 		return
 	}
+	size, cfg := w.getConfig()
 	if size != w.config.Size {
 		w.config.Size = size
 		w.w.Event(ConfigEvent{Config: w.config})
 	}
-	anim := w.animating || w.fling.anim.Active()
-	sync := w.redraw
-	w.redraw = false
-	// Draw animation only when not waiting for frame callback.
-	redrawAnim := anim && w.lastFrameCallback == nil
-	if !redrawAnim && !sync {
+	if cfg == (unit.Metric{}) {
 		return
 	}
-	if anim {
+	if anim && w.lastFrameCallback == nil {
 		w.lastFrameCallback = C.wl_surface_frame(w.surf)
 		// Use the surface as listener data for gio_onFrameDone.
 		C.wl_callback_add_listener(w.lastFrameCallback, &C.gio_callback_listener, unsafe.Pointer(w.surf))
@@ -1609,6 +1462,14 @@ func (w *window) display() *C.struct_wl_display {
 }
 
 func (w *window) surface() (*C.struct_wl_surface, int, int) {
+	if w.needAck {
+		C.xdg_surface_ack_configure(w.wmSurf, w.serial)
+		w.needAck = false
+	}
+	if w.newScale {
+		C.wl_surface_set_buffer_scale(w.surf, C.int32_t(w.scale))
+		w.newScale = false
+	}
 	sz, _ := w.getConfig()
 	return w.surf, sz.X, sz.Y
 }
@@ -1617,12 +1478,14 @@ func (w *window) ShowTextInput(show bool) {}
 
 func (w *window) SetInputHint(_ key.InputHint) {}
 
-func (w *window) EditorStateChanged(old, new editorState) {}
+// Close the window. Not implemented for Wayland.
+func (w *window) Close() {}
 
-// Close the window.
-func (w *window) Close() {
-	w.dead = true
-}
+// Maximize the window. Not implemented for Wayland.
+func (w *window) Maximize() {}
+
+// Center the window. Not implemented for Wayland.
+func (w *window) Center() {}
 
 func (w *window) NewContext() (context, error) {
 	var firstErr error

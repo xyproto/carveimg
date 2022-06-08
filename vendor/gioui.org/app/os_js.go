@@ -172,9 +172,12 @@ func (w *window) addEventListeners() {
 		return nil
 	})
 	w.addEventListener(w.window, "popstate", func(this js.Value, args []js.Value) interface{} {
-		if w.w.Event(key.Event{Name: key.NameBack}) {
+		ev := &system.CommandEvent{Type: system.CommandBack}
+		w.w.Event(ev)
+		if ev.Cancel {
 			return w.browserHistory.Call("forward")
 		}
+
 		return w.browserHistory.Call("back")
 	})
 	w.addEventListener(w.document, "visibilitychange", func(this js.Value, args []js.Value) interface{} {
@@ -297,7 +300,7 @@ func (w *window) addHistory() {
 func (w *window) flushInput() {
 	val := w.tarea.Get("value").String()
 	w.tarea.Set("value", "")
-	w.w.EditorInsert(string(val))
+	w.w.Event(key.EditEvent{Text: string(val)})
 }
 
 func (w *window) blur() {
@@ -478,8 +481,6 @@ func (w *window) animCallback() {
 	}
 }
 
-func (w *window) EditorStateChanged(old, new editorState) {}
-
 func (w *window) SetAnimating(anim bool) {
 	w.animating = anim
 	if anim && !w.animRequested {
@@ -512,9 +513,6 @@ func (w *window) Configure(options []Option) {
 	prev := w.config
 	cnf := w.config
 	cnf.apply(unit.Metric{}, options)
-	// Decorations are never disabled.
-	cnf.Decorated = true
-
 	if prev.Title != cnf.Title {
 		w.config.Title = cnf.Title
 		w.document.Set("title", cnf.Title)
@@ -530,48 +528,16 @@ func (w *window) Configure(options []Option) {
 		w.config.Orientation = cnf.Orientation
 		w.orientation(cnf.Orientation)
 	}
-	if cnf.Decorated != prev.Decorated {
-		w.config.Decorated = cnf.Decorated
-	}
 	if w.config != prev {
 		w.w.Event(ConfigEvent{Config: w.config})
 	}
 }
 
-func (w *window) Perform(system.Action) {}
+func (w *window) Raise() {}
 
-var webCursor = [...]string{
-	pointer.CursorDefault:                  "default",
-	pointer.CursorNone:                     "none",
-	pointer.CursorText:                     "text",
-	pointer.CursorVerticalText:             "vertical-text",
-	pointer.CursorPointer:                  "pointer",
-	pointer.CursorCrosshair:                "crosshair",
-	pointer.CursorAllScroll:                "all-scroll",
-	pointer.CursorColResize:                "col-resize",
-	pointer.CursorRowResize:                "row-resize",
-	pointer.CursorGrab:                     "grab",
-	pointer.CursorGrabbing:                 "grabbing",
-	pointer.CursorNotAllowed:               "not-allowed",
-	pointer.CursorWait:                     "wait",
-	pointer.CursorProgress:                 "progress",
-	pointer.CursorNorthWestResize:          "nw-resize",
-	pointer.CursorNorthEastResize:          "ne-resize",
-	pointer.CursorSouthWestResize:          "sw-resize",
-	pointer.CursorSouthEastResize:          "se-resize",
-	pointer.CursorNorthSouthResize:         "ns-resize",
-	pointer.CursorEastWestResize:           "ew-resize",
-	pointer.CursorWestResize:               "w-resize",
-	pointer.CursorEastResize:               "e-resize",
-	pointer.CursorNorthResize:              "n-resize",
-	pointer.CursorSouthResize:              "s-resize",
-	pointer.CursorNorthEastSouthWestResize: "nesw-resize",
-	pointer.CursorNorthWestSouthEastResize: "nwse-resize",
-}
-
-func (w *window) SetCursor(cursor pointer.Cursor) {
+func (w *window) SetCursor(name pointer.CursorName) {
 	style := w.cnv.Get("style")
-	style.Set("cursor", webCursor[cursor])
+	style.Set("cursor", string(name))
 }
 
 func (w *window) Wakeup() {
@@ -599,6 +565,12 @@ func (w *window) SetInputHint(mode key.InputHint) {
 
 // Close the window. Not implemented for js.
 func (w *window) Close() {}
+
+// Maximize the window. Not implemented for js.
+func (w *window) Maximize() {}
+
+// Center the window. Not implemented for js.
+func (w *window) Center() {}
 
 func (w *window) resize() {
 	w.scale = float32(w.window.Get("devicePixelRatio").Float())
@@ -643,11 +615,9 @@ func (w *window) draw(sync bool) {
 }
 
 func (w *window) getConfig() (image.Point, system.Insets, unit.Metric) {
-	invscale := unit.Dp(1. / w.scale)
-	return image.Pt(w.config.Size.X, w.config.Size.Y),
-		system.Insets{
-			Bottom: unit.Dp(w.inset.Y) * invscale,
-			Right:  unit.Dp(w.inset.X) * invscale,
+	return image.Pt(w.config.Size.X, w.config.Size.Y), system.Insets{
+			Bottom: unit.Px(w.inset.Y),
+			Right:  unit.Px(w.inset.X),
 		}, unit.Metric{
 			PxPerDp: w.scale,
 			PxPerSp: w.scale,
@@ -707,7 +677,6 @@ func osMain() {
 
 func translateKey(k string) (string, bool) {
 	var n string
-
 	switch k {
 	case "ArrowUp":
 		n = key.NameUpArrow
@@ -737,38 +706,8 @@ func translateKey(k string) (string, bool) {
 		n = key.NameTab
 	case " ":
 		n = key.NameSpace
-	case "F1":
-		n = key.NameF1
-	case "F2":
-		n = key.NameF2
-	case "F3":
-		n = key.NameF3
-	case "F4":
-		n = key.NameF4
-	case "F5":
-		n = key.NameF5
-	case "F6":
-		n = key.NameF6
-	case "F7":
-		n = key.NameF7
-	case "F8":
-		n = key.NameF8
-	case "F9":
-		n = key.NameF9
-	case "F10":
-		n = key.NameF10
-	case "F11":
-		n = key.NameF11
-	case "F12":
-		n = key.NameF12
-	case "Control":
-		n = key.NameCtrl
-	case "Shift":
-		n = key.NameShift
-	case "Alt":
-		n = key.NameAlt
-	case "OS":
-		n = key.NameSuper
+	case "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12":
+		n = k
 	default:
 		r, s := utf8.DecodeRuneInString(k)
 		// If there is exactly one printable character, return that.

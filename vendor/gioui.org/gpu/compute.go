@@ -10,7 +10,6 @@ import (
 	"hash/maphash"
 	"image"
 	"image/color"
-	"image/draw"
 	"image/png"
 	"io/ioutil"
 	"math"
@@ -21,9 +20,9 @@ import (
 	"unsafe"
 
 	"gioui.org/cpu"
+	"gioui.org/f32"
 	"gioui.org/gpu/internal/driver"
 	"gioui.org/internal/byteslice"
-	"gioui.org/internal/f32"
 	"gioui.org/internal/f32color"
 	"gioui.org/internal/ops"
 	"gioui.org/internal/scene"
@@ -265,6 +264,7 @@ type clipState struct {
 	path      []byte
 	pathKey   ops.Key
 	intersect f32.Rectangle
+	push      bool
 
 	clipKey
 }
@@ -305,6 +305,11 @@ type encoder struct {
 	npath    int
 	npathseg int
 	ntrans   int
+}
+
+type encodeState struct {
+	trans f32.Affine2D
+	clip  f32.Rectangle
 }
 
 // sizedBuffer holds a GPU buffer, or its equivalent CPU memory.
@@ -643,13 +648,17 @@ func (g *compute) frame(target RenderTarget) error {
 
 func (g *compute) dumpAtlases() {
 	for i, a := range g.atlases {
-		dump := image.NewRGBA(image.Rectangle{Max: a.size})
-		err := driver.DownloadImage(g.ctx, a.image, dump)
+		dump, err := driver.DownloadImage(g.ctx, a.image, image.Rectangle{Max: a.size})
 		if err != nil {
 			panic(err)
 		}
 		nrgba := image.NewNRGBA(dump.Bounds())
-		draw.Draw(nrgba, image.Rectangle{}, dump, image.Point{}, draw.Src)
+		bnd := dump.Bounds()
+		for x := bnd.Min.X; x < bnd.Max.X; x++ {
+			for y := bnd.Min.Y; y < bnd.Max.Y; y++ {
+				nrgba.SetNRGBA(x, y, f32color.RGBAToNRGBA(dump.RGBAAt(x, y)))
+			}
+		}
 		var buf bytes.Buffer
 		if err := png.Encode(&buf, nrgba); err != nil {
 			panic(err)
@@ -849,7 +858,7 @@ func (g *compute) blitLayers(d driver.LoadDesc, fbo driver.Texture, viewport ima
 	for _, l := range layers {
 		placef := layout.FPt(l.alloc.rect.Min)
 		sizef := layout.FPt(l.rect.Size())
-		r := f32.FRect(l.rect)
+		r := layout.FRect(l.rect)
 		quad := [4]layerVertex{
 			{posX: float32(r.Min.X), posY: float32(r.Min.Y), u: placef.X, v: placef.Y},
 			{posX: float32(r.Max.X), posY: float32(r.Min.Y), u: placef.X + sizef.X, v: placef.Y},
@@ -936,7 +945,7 @@ func (g *compute) renderMaterials() error {
 			imgAtlas = op.imgAlloc.atlas
 			quad := g.materialQuad(imgAtlas.size, op.key.transform, op.img, op.imgAlloc.rect.Min)
 			boundsf := quadBounds(quad)
-			bounds := boundsf.Round()
+			bounds := boundRectF(boundsf)
 			bounds = bounds.Intersect(op.key.bounds)
 
 			size := bounds.Size()
@@ -1180,19 +1189,12 @@ func min(p1, p2 f32.Point) f32.Point {
 	return p
 }
 
-func (enc *encoder) encodePath(verts []byte, fillMode int) {
-	for ; len(verts) >= scene.CommandSize+4; verts = verts[scene.CommandSize+4:] {
+func (enc *encoder) encodePath(verts []byte) {
+	for len(verts) >= scene.CommandSize+4 {
 		cmd := ops.DecodeCommand(verts[4:])
-		if cmd.Op() == scene.OpGap {
-			if fillMode != scene.FillModeNonzero {
-				// Skip gaps in strokes.
-				continue
-			}
-			// Replace them by a straight line in outlines.
-			cmd = scene.Line(scene.DecodeGap(cmd))
-		}
 		enc.scene = append(enc.scene, cmd)
 		enc.npathseg++
+		verts = verts[scene.CommandSize+4:]
 	}
 }
 
@@ -1606,6 +1608,13 @@ func (e *encoder) numElements() int {
 	return len(e.scene)
 }
 
+func (e *encoder) append(e2 encoder) {
+	e.scene = append(e.scene, e2.scene...)
+	e.npath += e2.npath
+	e.npathseg += e2.npathseg
+	e.ntrans += e2.ntrans
+}
+
 func (e *encoder) transform(m f32.Affine2D) {
 	e.scene = append(e.scene, scene.Transform(m))
 	e.ntrans++
@@ -1650,6 +1659,11 @@ func (e *encoder) fillImage(index int, offset image.Point) {
 
 func (e *encoder) line(start, end f32.Point) {
 	e.scene = append(e.scene, scene.Line(start, end))
+	e.npathseg++
+}
+
+func (e *encoder) quad(start, ctrl, end f32.Point) {
+	e.scene = append(e.scene, scene.Quad(start, ctrl, end))
 	e.npathseg++
 }
 
@@ -1764,7 +1778,7 @@ func (c *collector) collect(root *op.Ops, viewport image.Point, texOps *[]textur
 		case ops.TypeClip:
 			var op ops.ClipOp
 			op.Decode(encOp.Data)
-			bounds := f32.FRect(op.Bounds)
+			bounds := layout.FRect(op.Bounds)
 			c.addClip(&state, fview, bounds, pathData.data, pathData.key, pathData.hash, strWidth, true)
 			pathData.data = nil
 			strWidth = 0
@@ -1878,7 +1892,7 @@ func (c *collector) collect(root *op.Ops, viewport image.Point, texOps *[]textur
 			// except for their integer offsets can share a transformed image.
 			t := op.state.t.Offset(layout.FPt(op.offset))
 			t, off := separateTransform(t)
-			bounds := op.intersect.Round().Sub(off)
+			bounds := boundRectF(op.intersect).Sub(off)
 			*texOps = append(*texOps, textureOp{
 				img: op.state.image,
 				off: off,
@@ -1945,7 +1959,7 @@ func (g *compute) layer(viewport image.Point, texOps []textureOp) {
 				}
 			}
 			for i, op := range l.ops {
-				l.rect = l.rect.Union(op.intersect.Round())
+				l.rect = l.rect.Union(boundRectF(op.intersect))
 				l.ops[i].layer = len(c.frame.layers)
 			}
 			c.frame.layers = append(c.frame.layers, l)
@@ -2098,7 +2112,7 @@ func encodeOp(viewport image.Point, absOff image.Point, enc *encoder, texOps []t
 		if len(cl.path) == 0 {
 			enc.rect(cl.state.bounds)
 		} else {
-			enc.encodePath(cl.path, fillMode)
+			enc.encodePath(cl.path)
 		}
 		if i != 0 {
 			enc.beginClip(cl.union.Add(absOfff))

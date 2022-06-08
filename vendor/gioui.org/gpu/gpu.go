@@ -18,9 +18,9 @@ import (
 	"time"
 	"unsafe"
 
+	"gioui.org/f32"
 	"gioui.org/gpu/internal/driver"
 	"gioui.org/internal/byteslice"
-	"gioui.org/internal/f32"
 	"gioui.org/internal/f32color"
 	"gioui.org/internal/ops"
 	"gioui.org/internal/scene"
@@ -296,19 +296,11 @@ const (
 	materialTexture
 )
 
-// New creates a GPU for the given API.
 func New(api API) (GPU, error) {
 	d, err := driver.NewDevice(api)
 	if err != nil {
 		return nil, err
 	}
-	return NewWithDevice(d)
-}
-
-// NewWithDevice creates a GPU with a pre-existing device.
-//
-// Note: for internal use only.
-func NewWithDevice(d driver.Device) (GPU, error) {
 	d.BeginFrame(nil, false, image.Point{})
 	defer d.EndFrame()
 	forceCompute := os.Getenv("GIORENDERER") == "forcecompute"
@@ -362,8 +354,8 @@ func (g *gpu) collect(viewport image.Point, frameOps *op.Ops) {
 	g.renderer.pather.viewport = viewport
 	g.drawOps.reset(viewport)
 	g.drawOps.collect(frameOps, viewport)
+	g.frameStart = time.Now()
 	if g.drawOps.profile && g.timers == nil && g.ctx.Caps().Features.Has(driver.FeatureTimers) {
-		g.frameStart = time.Now()
 		g.timers = newTimers(g.ctx)
 		g.stencilTimer = g.timers.newTimer()
 		g.coverTimer = g.timers.newTimer()
@@ -695,8 +687,8 @@ func (r *renderer) intersectPath(p *pathOp, clip image.Rectangle) {
 	}
 	fbo := r.pather.stenciler.cover(p.place.Idx)
 	r.ctx.BindTexture(0, fbo.tex)
-	coverScale, coverOff := texSpaceTransform(f32.FRect(uv), fbo.size)
-	subScale, subOff := texSpaceTransform(f32.FRect(sub), p.clip.Size())
+	coverScale, coverOff := texSpaceTransform(layout.FRect(uv), fbo.size)
+	subScale, subOff := texSpaceTransform(layout.FRect(sub), p.clip.Size())
 	r.pather.stenciler.ipipeline.uniforms.vert.uvTransform = [4]float32{coverScale.X, coverScale.Y, coverOff.X, coverOff.Y}
 	r.pather.stenciler.ipipeline.uniforms.vert.subUVTransform = [4]float32{subScale.X, subScale.Y, subOff.X, subOff.Y}
 	r.pather.stenciler.ipipeline.pipeline.UploadUniforms(r.ctx)
@@ -756,6 +748,28 @@ func (r *renderer) packStencils(pops *[]*pathOp) {
 		i++
 	}
 	*pops = ops
+}
+
+// boundRectF returns a bounding image.Rectangle for a f32.Rectangle.
+func boundRectF(r f32.Rectangle) image.Rectangle {
+	return image.Rectangle{
+		Min: image.Point{
+			X: int(floor(r.Min.X)),
+			Y: int(floor(r.Min.Y)),
+		},
+		Max: image.Point{
+			X: int(ceil(r.Max.X)),
+			Y: int(ceil(r.Max.Y)),
+		},
+	}
+}
+
+func ceil(v float32) int {
+	return int(math.Ceil(float64(v)))
+}
+
+func floor(v float32) int {
+	return int(math.Floor(float64(v)))
 }
 
 func (d *drawOps) reset(viewport image.Point) {
@@ -888,7 +902,7 @@ loop:
 			var op ops.ClipOp
 			op.Decode(encOp.Data)
 			quads.key.outline = op.Outline
-			bounds := f32.FRect(op.Bounds)
+			bounds := layout.FRect(op.Bounds)
 			trans, off := splitTransform(state.t)
 			if len(quads.aux) > 0 {
 				// There is a clipping path, build the gpu data and update the
@@ -961,7 +975,7 @@ loop:
 				d.addClipPath(&state, clipData, k, bnd, off, false)
 			}
 
-			bounds := cl.Round()
+			bounds := boundRectF(cl)
 			mat := state.materialFor(bnd, off, partialTrans, bounds)
 
 			rect := state.cpath == nil || state.cpath.rect
@@ -1023,7 +1037,7 @@ func (d *drawState) materialFor(rect f32.Rectangle, off f32.Point, partTrans f32
 		m.uvTrans = partTrans.Mul(gradientSpaceTransform(clip, off, d.stop1, d.stop2))
 	case materialTexture:
 		m.material = materialTexture
-		dr := rect.Add(off).Round()
+		dr := boundRectF(rect.Add(off))
 		sz := d.image.src.Bounds().Size()
 		sr := f32.Rectangle{
 			Max: f32.Point{
@@ -1108,7 +1122,7 @@ func (r *renderer) drawOps(cache *resourceCache, ops []imageOp) {
 			Min: img.place.Pos,
 			Max: img.place.Pos.Add(drc.Size()),
 		}
-		coverScale, coverOff := texSpaceTransform(f32.FRect(uv), fbo.size)
+		coverScale, coverOff := texSpaceTransform(layout.FRect(uv), fbo.size)
 		p := r.pather.coverer.pipelines[m.material]
 		r.ctx.BindPipeline(p.pipeline)
 		r.ctx.BindVertexBuffer(r.blitter.quadVerts, 0)
@@ -1150,7 +1164,7 @@ func newUniformBuffer(b driver.Device, uniformBlock interface{}) *uniformBuffer 
 	// Determine the size of the uniforms structure, *uniforms.
 	size := ref.Elem().Type().Size()
 	// Map the uniforms structure as a byte slice.
-	ptr := unsafe.Slice((*byte)(unsafe.Pointer(ref.Pointer())), size)
+	ptr := (*[1 << 30]byte)(unsafe.Pointer(ref.Pointer()))[:size:size]
 	ubuf, err := b.NewBuffer(driver.BufferBindingUniforms, len(ptr))
 	if err != nil {
 		panic(err)
@@ -1319,12 +1333,6 @@ func decodeToOutlineQuads(qs *quadSplitter, tr f32.Affine2D, pathData []byte) {
 		case scene.OpLine:
 			var q stroke.QuadSegment
 			q.From, q.To = scene.DecodeLine(cmd)
-			q.Ctrl = q.From.Add(q.To).Mul(.5)
-			q = q.Transform(tr)
-			qs.splitAndEncode(q)
-		case scene.OpGap:
-			var q stroke.QuadSegment
-			q.From, q.To = scene.DecodeGap(cmd)
 			q.Ctrl = q.From.Add(q.To).Mul(.5)
 			q = q.Transform(tr)
 			qs.splitAndEncode(q)

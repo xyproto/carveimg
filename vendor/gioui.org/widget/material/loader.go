@@ -13,6 +13,7 @@ import (
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
+	"gioui.org/unit"
 )
 
 type LoaderStyle struct {
@@ -31,21 +32,21 @@ func (l LoaderStyle) Layout(gtx layout.Context) layout.Dimensions {
 		diam = minY
 	}
 	if diam == 0 {
-		diam = gtx.Dp(24)
+		diam = gtx.Px(unit.Dp(24))
 	}
 	sz := gtx.Constraints.Constrain(image.Pt(diam, diam))
-	radius := sz.X / 2
-	defer op.Offset(image.Pt(radius, radius)).Push(gtx.Ops).Pop()
+	radius := float32(sz.X) * .5
+	defer op.Offset(f32.Pt(radius, radius)).Push(gtx.Ops).Pop()
 
 	dt := float32((time.Duration(gtx.Now.UnixNano()) % (time.Second)).Seconds())
 	startAngle := dt * math.Pi * 2
 	endAngle := startAngle + math.Pi*1.5
 
-	defer clipLoader(gtx.Ops, startAngle, endAngle, float32(radius)).Push(gtx.Ops).Pop()
+	defer clipLoader(gtx.Ops, startAngle, endAngle, radius).Push(gtx.Ops).Pop()
 	paint.ColorOp{
 		Color: l.Color,
 	}.Add(gtx.Ops)
-	defer op.Offset(image.Pt(-radius, -radius)).Push(gtx.Ops).Pop()
+	defer op.Offset(f32.Pt(-radius, -radius)).Push(gtx.Ops).Pop()
 	paint.PaintOp{}.Add(gtx.Ops)
 	op.InvalidateOp{}.Add(gtx.Ops)
 	return layout.Dimensions{

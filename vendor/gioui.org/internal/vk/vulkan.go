@@ -519,8 +519,6 @@ const (
 	ERROR_DEVICE_LOST      = Error(C.VK_ERROR_DEVICE_LOST)
 	SUBOPTIMAL_KHR         = Error(C.VK_SUBOPTIMAL_KHR)
 
-	FENCE_CREATE_SIGNALED_BIT = 0x00000001
-
 	BLEND_FACTOR_ZERO                BlendFactor = C.VK_BLEND_FACTOR_ZERO
 	BLEND_FACTOR_ONE                 BlendFactor = C.VK_BLEND_FACTOR_ONE
 	BLEND_FACTOR_ONE_MINUS_SRC_ALPHA BlendFactor = C.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
@@ -825,19 +823,8 @@ func CreateInstance(exts ...string) (Instance, error) {
 	if err := vkInit(); err != nil {
 		return nil, err
 	}
-	// VK_MAKE_API_VERSION macro.
-	makeVer := func(variant, major, minor, patch int) C.uint32_t {
-		return ((((C.uint32_t)(variant)) << 29) | (((C.uint32_t)(major)) << 22) | (((C.uint32_t)(minor)) << 12) | ((C.uint32_t)(patch)))
-	}
-	appInf := C.VkApplicationInfo{
-		sType:      C.VK_STRUCTURE_TYPE_APPLICATION_INFO,
-		apiVersion: makeVer(0, 1, 0, 0),
-	}
 	inf := C.VkInstanceCreateInfo{
 		sType: C.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-		// pApplicationInfo may be omitted according to the spec, but the Android
-		// emulator crashes without it.
-		pApplicationInfo: &appInf,
 	}
 	if len(exts) > 0 {
 		cexts := mallocCStringArr(exts)
@@ -1739,22 +1726,18 @@ func UpdateDescriptorSet(d Device, write WriteDescriptorSet) {
 	C.vkUpdateDescriptorSets(funcs.vkUpdateDescriptorSets, d, write, 0, nil)
 }
 
-func AllocateDescriptorSets(d Device, pool DescriptorPool, layout DescriptorSetLayout, count int) ([]DescriptorSet, error) {
-	layouts := make([]DescriptorSetLayout, count)
-	for i := range layouts {
-		layouts[i] = layout
-	}
+func AllocateDescriptorSet(d Device, pool DescriptorPool, layout DescriptorSetLayout) (DescriptorSet, error) {
 	inf := C.VkDescriptorSetAllocateInfo{
 		sType:              C.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
 		descriptorPool:     pool,
-		descriptorSetCount: C.uint32_t(count),
-		pSetLayouts:        &layouts[0],
+		descriptorSetCount: 1,
+		pSetLayouts:        &layout,
 	}
-	sets := make([]DescriptorSet, count)
-	if err := vkErr(C.vkAllocateDescriptorSets(funcs.vkAllocateDescriptorSets, d, inf, &sets[0])); err != nil {
-		return nil, fmt.Errorf("vulkan: vkAllocateDescriptorSets: %w", err)
+	var set C.VkDescriptorSet
+	if err := vkErr(C.vkAllocateDescriptorSets(funcs.vkAllocateDescriptorSets, d, inf, &set)); err != nil {
+		return nilDescriptorSet, fmt.Errorf("vulkan: vkAllocateDescriptorSets: %w", err)
 	}
-	return sets, nil
+	return set, nil
 }
 
 func CreateComputePipeline(d Device, mod ShaderModule, layout PipelineLayout) (Pipeline, error) {
@@ -1777,10 +1760,9 @@ func CreateComputePipeline(d Device, mod ShaderModule, layout PipelineLayout) (P
 	return pipe, nil
 }
 
-func CreateFence(d Device, flags int) (Fence, error) {
+func CreateFence(d Device) (Fence, error) {
 	inf := C.VkFenceCreateInfo{
 		sType: C.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-		flags: C.VkFenceCreateFlags(flags),
 	}
 	var f C.VkFence
 	if err := vkErr(C.vkCreateFence(funcs.vkCreateFence, d, &inf, nil, &f)); err != nil {

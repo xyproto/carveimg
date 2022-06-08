@@ -101,9 +101,7 @@ func (l *List) init(gtx Context, len int) {
 	}
 }
 
-// Layout a List of len items, where each item is implicitly defined
-// by the callback w. Layout can handle very large lists because it only calls
-// w to fill its viewport and the distance scrolled, if any.
+// Layout the List.
 func (l *List) Layout(gtx Context, len int, w ListElement) Dimensions {
 	l.init(gtx, len)
 	crossMin, crossMax := l.Axis.crossConstraint(gtx.Constraints)
@@ -183,25 +181,12 @@ func (l *List) nextDir() iterationDir {
 	if l.Position.Offset < 0 && l.Position.First == 0 {
 		l.Position.Offset = 0
 	}
-	// Lay out an extra (invisible) child at each end to enable focus to
-	// move to them, triggering automatic scroll.
-	firstSize, lastSize := 0, 0
-	if len(l.children) > 0 {
-		if l.Position.First > 0 {
-			firstChild := l.children[0]
-			firstSize = l.Axis.Convert(firstChild.size).X
-		}
-		if last < l.len {
-			lastChild := l.children[len(l.children)-1]
-			lastSize = l.Axis.Convert(lastChild.size).X
-		}
-	}
 	switch {
 	case len(l.children) == l.len:
 		return iterateNone
-	case l.maxSize-l.Position.Offset-lastSize < vsize:
+	case l.maxSize-l.Position.Offset < vsize:
 		return iterateForward
-	case l.Position.Offset-firstSize < 0:
+	case l.Position.Offset < 0:
 		return iterateBackward
 	}
 	return iterateNone
@@ -234,11 +219,9 @@ func (l *List) layout(ops *op.Ops, macro op.MacroOp) Dimensions {
 	}
 	mainMin, mainMax := l.Axis.mainConstraint(l.cs)
 	children := l.children
-	var first scrollChild
-	// Skip invisible children.
+	// Skip invisible children
 	for len(children) > 0 {
-		child := children[0]
-		sz := child.size
+		sz := children[0].size
 		mainSize := l.Axis.Convert(sz).X
 		if l.Position.Offset < mainSize {
 			// First child is partially visible.
@@ -246,12 +229,10 @@ func (l *List) layout(ops *op.Ops, macro op.MacroOp) Dimensions {
 		}
 		l.Position.First++
 		l.Position.Offset -= mainSize
-		first = child
 		children = children[1:]
 	}
 	size := -l.Position.Offset
 	var maxCross int
-	var last scrollChild
 	for i, child := range children {
 		sz := l.Axis.Convert(child.size)
 		if c := sz.Y; c > maxCross {
@@ -259,21 +240,18 @@ func (l *List) layout(ops *op.Ops, macro op.MacroOp) Dimensions {
 		}
 		size += sz.X
 		if size >= mainMax {
-			if i < len(children)-1 {
-				last = children[i+1]
-			}
 			children = children[:i+1]
 			break
 		}
 	}
 	l.Position.Count = len(children)
 	l.Position.OffsetLast = mainMax - size
+	pos := -l.Position.Offset
 	// ScrollToEnd lists are end aligned.
 	if space := l.Position.OffsetLast; l.ScrollToEnd && space > 0 {
-		l.Position.Offset -= space
+		pos += space
 	}
-	pos := -l.Position.Offset
-	layout := func(child scrollChild) {
+	for _, child := range children {
 		sz := l.Axis.Convert(child.size)
 		var cross int
 		switch l.Alignment {
@@ -283,28 +261,25 @@ func (l *List) layout(ops *op.Ops, macro op.MacroOp) Dimensions {
 			cross = (maxCross - sz.Y) / 2
 		}
 		childSize := sz.X
+		max := childSize + pos
+		if max > mainMax {
+			max = mainMax
+		}
 		min := pos
 		if min < 0 {
 			min = 0
 		}
+		r := image.Rectangle{
+			Min: l.Axis.Convert(image.Pt(min, -inf)),
+			Max: l.Axis.Convert(image.Pt(max, inf)),
+		}
+		cl := clip.Rect(r).Push(ops)
 		pt := l.Axis.Convert(image.Pt(pos, cross))
-		trans := op.Offset(pt).Push(ops)
+		trans := op.Offset(FPt(pt)).Push(ops)
 		child.call.Add(ops)
 		trans.Pop()
+		cl.Pop()
 		pos += childSize
-	}
-	// Lay out leading invisible child.
-	if first != (scrollChild{}) {
-		sz := l.Axis.Convert(first.size)
-		pos -= sz.X
-		layout(first)
-	}
-	for _, child := range children {
-		layout(child)
-	}
-	// Lay out trailing invisible child.
-	if last != (scrollChild{}) {
-		layout(last)
 	}
 	atStart := l.Position.First == 0 && l.Position.Offset <= 0
 	atEnd := l.Position.First+len(children) == l.len && mainMax >= pos
@@ -318,28 +293,21 @@ func (l *List) layout(ops *op.Ops, macro op.MacroOp) Dimensions {
 	if pos > mainMax {
 		pos = mainMax
 	}
-	if crossMin, crossMax := l.Axis.crossConstraint(l.cs); maxCross < crossMin {
-		maxCross = crossMin
-	} else if maxCross > crossMax {
-		maxCross = crossMax
-	}
 	dims := l.Axis.Convert(image.Pt(pos, maxCross))
 	call := macro.Stop()
 	defer clip.Rect(image.Rectangle{Max: dims}).Push(ops).Pop()
 
-	min, max := int(-inf), int(inf)
-	if l.Position.First == 0 {
+	var min, max int
+	if o := l.Position.Offset; o > 0 {
 		// Use the size of the invisible part as scroll boundary.
-		min = -l.Position.Offset
-		if min > 0 {
-			min = 0
-		}
+		min = -o
+	} else if l.Position.First > 0 {
+		min = -inf
 	}
-	if l.Position.First+l.Position.Count == l.len {
-		max = -l.Position.OffsetLast
-		if max < 0 {
-			max = 0
-		}
+	if o := l.Position.OffsetLast; o < 0 {
+		max = -o
+	} else if l.Position.First+l.Position.Count < l.len {
+		max = inf
 	}
 	scrollRange := image.Rectangle{
 		Min: l.Axis.Convert(image.Pt(min, 0)),

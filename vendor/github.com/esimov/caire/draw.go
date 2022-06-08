@@ -19,15 +19,15 @@ const (
 )
 
 // DrawSeam visualizes the seam carver in action when the preview mode is activated.
-// It receives as parameters the shape type, the seam (x,y) coordinates and a dimmension.
-func (g *Gui) DrawSeam(shape string, x, y, dim float32) {
+// It receives as parameters the shape type, the seam (x,y) coordinate and a size.
+func (g *Gui) DrawSeam(shape string, x, y, s float64) {
 	r := getRatio(g.cfg.window.w, g.cfg.window.h)
 
 	switch shape {
 	case circle:
-		g.drawCircle(x*r, y*r, dim)
+		g.drawCircle(x*r, y*r, s)
 	case line:
-		g.drawLine(x*r, y*r, dim)
+		g.drawLine(x*r, y*r, s)
 	}
 }
 
@@ -40,8 +40,8 @@ func (g *Gui) EncodeSeamToImg() {
 	r := getRatio(g.cfg.window.w, g.cfg.window.h)
 
 	for _, s := range g.proc.seams {
-		x := int(float32(s.X) * r)
-		y := int(float32(s.Y) * r)
+		x := int(float64(s.X) * r)
+		y := int(float64(s.Y) * r)
 		img.Set(x, y, g.getFillColor())
 	}
 
@@ -56,7 +56,7 @@ func (g *Gui) EncodeSeamToImg() {
 }
 
 // drawCircle draws a circle at the seam (x,y) coordinate with the provided size.
-func (g *Gui) drawCircle(x, y, s float32) {
+func (g *Gui) drawCircle(x, y, s float64) {
 	var (
 		sq   float64
 		p1   f32.Point
@@ -64,9 +64,9 @@ func (g *Gui) drawCircle(x, y, s float32) {
 		orig = g.point(x-s, y)
 	)
 
-	sq = math.Sqrt(float64(s*s) - float64(s*s))
-	p1 = g.point(x+float32(sq), y).Sub(orig)
-	p2 = g.point(x-float32(sq), y).Sub(orig)
+	sq = math.Sqrt(s*s - s*s)
+	p1 = g.point(x+sq, y).Sub(orig)
+	p2 = g.point(x-sq, y).Sub(orig)
 
 	col := utils.HexToRGBA(g.cp.SeamColor)
 	g.setFillColor(col)
@@ -83,7 +83,7 @@ func (g *Gui) drawCircle(x, y, s float32) {
 }
 
 // drawLine draws a line at the seam (x,y) coordinate with the provided line thickness.
-func (g *Gui) drawLine(x, y, thickness float32) {
+func (g *Gui) drawLine(x, y, s float64) {
 	var (
 		p1   = g.point(x, y)
 		p2   = g.point(x, y+1)
@@ -98,16 +98,16 @@ func (g *Gui) drawLine(x, y, thickness float32) {
 	col := utils.HexToRGBA(g.cp.SeamColor)
 	g.setFillColor(col)
 
-	defer clip.Stroke{Path: path.End(), Width: float32(thickness)}.Op().Push(g.ctx.Ops).Pop()
+	defer clip.Stroke{Path: path.End(), Width: float32(s)}.Op().Push(g.ctx.Ops).Pop()
 	paint.ColorOp{Color: g.setColor(g.getFillColor())}.Add(g.ctx.Ops)
 	paint.PaintOp{}.Add(g.ctx.Ops)
 }
 
 // point converts the seam (x,y) coordinate to Gio f32.Point.
-func (g *Gui) point(x, y float32) f32.Point {
+func (g *Gui) point(x, y float64) f32.Point {
 	return f32.Point{
-		X: x,
-		Y: y,
+		X: float32(x),
+		Y: float32(y),
 	}
 }
 
@@ -133,13 +133,12 @@ func (g *Gui) getFillColor() color.Color {
 }
 
 // getRatio returns the image aspect ratio.
-func getRatio(w, h float32) float32 {
-	var r float32 = 1
-	if w > maxScreenX.V && h > maxScreenY.V {
-		wr := float32(maxScreenX.V) / float32(w) // width ratio
-		hr := float32(maxScreenY.V) / float32(h) // height ratio
-
-		r = utils.Min(wr, hr)
+func getRatio(w, h float64) float64 {
+	var r float64 = 1
+	if w > maxScreenX && h > maxScreenY {
+		wr := float64(maxScreenX) / float64(w) // width ratio
+		hr := float64(maxScreenY) / float64(h) // height ratio
+		r = math.Min(wr, hr)
 	}
 	return r
 }

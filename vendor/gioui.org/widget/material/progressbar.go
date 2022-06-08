@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 
+	"gioui.org/f32"
 	"gioui.org/internal/f32color"
 	"gioui.org/layout"
 	"gioui.org/op/clip"
@@ -28,26 +29,27 @@ func ProgressBar(th *Theme, progress float32) ProgressBarStyle {
 }
 
 func (p ProgressBarStyle) Layout(gtx layout.Context) layout.Dimensions {
-	shader := func(width int, color color.NRGBA) layout.Dimensions {
-		const maxHeight = unit.Dp(4)
-		rr := gtx.Dp(2)
+	shader := func(width float32, color color.NRGBA) layout.Dimensions {
+		maxHeight := unit.Dp(4)
+		rr := float32(gtx.Px(unit.Dp(2)))
 
-		d := image.Point{X: width, Y: gtx.Dp(maxHeight)}
+		d := image.Point{X: int(width), Y: gtx.Px(maxHeight)}
 
-		defer clip.UniformRRect(image.Rectangle{Max: image.Pt(width, d.Y)}, rr).Push(gtx.Ops).Pop()
+		height := float32(gtx.Px(maxHeight))
+		defer clip.UniformRRect(f32.Rectangle{Max: f32.Pt(width, height)}, rr).Push(gtx.Ops).Pop()
 		paint.ColorOp{Color: color}.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 
 		return layout.Dimensions{Size: d}
 	}
 
-	progressBarWidth := gtx.Constraints.Max.X
+	progressBarWidth := float32(gtx.Constraints.Max.X)
 	return layout.Stack{Alignment: layout.W}.Layout(gtx,
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 			return shader(progressBarWidth, p.TrackColor)
 		}),
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-			fillWidth := int(float32(progressBarWidth) * clamp1(p.Progress))
+			fillWidth := progressBarWidth * clamp1(p.Progress)
 			fillColor := p.Color
 			if gtx.Queue == nil {
 				fillColor = f32color.Disabled(fillColor)

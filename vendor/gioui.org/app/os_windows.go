@@ -6,13 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"reflect"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
-	"unicode/utf8"
 	"unsafe"
 
 	syscall "golang.org/x/sys/windows"
@@ -108,6 +108,7 @@ func newWindow(window *callbacks, options []Option) error {
 		w.w.SetDriver(w)
 		w.w.Event(ViewEvent{HWND: uintptr(w.hwnd)})
 		w.Configure(options)
+		windows.ShowWindow(w.hwnd, windows.SW_SHOWDEFAULT)
 		windows.SetForegroundWindow(w.hwnd)
 		windows.SetFocus(w.hwnd)
 		// Since the window class for the cursor is null,
@@ -184,45 +185,6 @@ func createNativeWindow() (*window, error) {
 	return w, nil
 }
 
-// update() handles changes done by the user, and updates the configuration.
-// It reads the window style and size/position and updates w.config.
-// If anything has changed it emits a ConfigEvent to notify the application.
-func (w *window) update() {
-	var triggerEvent bool
-	r := windows.GetWindowRect(w.hwnd)
-	size := image.Point{
-		X: int(r.Right - r.Left - w.deltas.width),
-		Y: int(r.Bottom - r.Top - w.deltas.height),
-	}
-
-	// Check the window mode.
-	mode := w.config.Mode
-	p := windows.GetWindowPlacement(w.hwnd)
-	style := windows.GetWindowLong(w.hwnd, windows.GWL_STYLE)
-	if style&windows.WS_OVERLAPPEDWINDOW == 0 {
-		mode = Fullscreen
-		mi := windows.GetMonitorInfo(w.hwnd).Monitor
-		size = image.Point{X: int(mi.Right - mi.Left), Y: int(mi.Bottom - mi.Top)}
-	} else if p.IsMinimized() {
-		mode = Minimized
-	} else if p.IsMaximized() {
-		mode = Maximized
-	} else {
-		mode = Windowed
-	}
-	if size != w.config.Size {
-		w.config.Size = size
-		triggerEvent = true
-	}
-	if mode != w.config.Mode {
-		w.config.Mode = mode
-		triggerEvent = true
-	}
-	if triggerEvent {
-		w.w.Event(ConfigEvent{Config: w.config})
-	}
-}
-
 func windowProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 	win, exists := winMap.Load(hwnd)
 	if !exists {
@@ -240,7 +202,7 @@ func windowProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr
 		fallthrough
 	case windows.WM_CHAR:
 		if r := rune(wParam); unicode.IsPrint(r) {
-			w.w.EditorInsert(string(r))
+			w.w.Event(key.EditEvent{Text: string(r)})
 		}
 		// The message is processed.
 		return windows.TRUE
@@ -318,10 +280,8 @@ func windowProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr
 	case windows.WM_SIZE:
 		switch wParam {
 		case windows.SIZE_MINIMIZED:
-			w.update()
 			w.setStage(system.StagePaused)
 		case windows.SIZE_MAXIMIZED, windows.SIZE_RESTORED:
-			w.update()
 			w.setStage(system.StageRunning)
 		}
 	case windows.WM_GETMINMAXINFO:
@@ -346,59 +306,6 @@ func windowProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr
 		}
 	case _WM_WAKEUP:
 		w.w.Event(wakeupEvent{})
-	case windows.WM_IME_STARTCOMPOSITION:
-		imc := windows.ImmGetContext(w.hwnd)
-		if imc == 0 {
-			return windows.TRUE
-		}
-		defer windows.ImmReleaseContext(w.hwnd, imc)
-		sel := w.w.EditorState().Selection
-		caret := sel.Transform.Transform(sel.Caret.Pos.Add(f32.Pt(0, sel.Caret.Descent)))
-		icaret := image.Pt(int(caret.X+.5), int(caret.Y+.5))
-		windows.ImmSetCompositionWindow(imc, icaret.X, icaret.Y)
-		windows.ImmSetCandidateWindow(imc, icaret.X, icaret.Y)
-	case windows.WM_IME_COMPOSITION:
-		imc := windows.ImmGetContext(w.hwnd)
-		if imc == 0 {
-			return windows.TRUE
-		}
-		defer windows.ImmReleaseContext(w.hwnd, imc)
-		state := w.w.EditorState()
-		rng := state.compose
-		if rng.Start == -1 {
-			rng = state.Selection.Range
-		}
-		if rng.Start > rng.End {
-			rng.Start, rng.End = rng.End, rng.Start
-		}
-		var replacement string
-		switch {
-		case lParam&windows.GCS_RESULTSTR != 0:
-			replacement = windows.ImmGetCompositionString(imc, windows.GCS_RESULTSTR)
-		case lParam&windows.GCS_COMPSTR != 0:
-			replacement = windows.ImmGetCompositionString(imc, windows.GCS_COMPSTR)
-		}
-		end := rng.Start + utf8.RuneCountInString(replacement)
-		w.w.EditorReplace(rng, replacement)
-		state = w.w.EditorState()
-		comp := key.Range{
-			Start: rng.Start,
-			End:   end,
-		}
-		if lParam&windows.GCS_DELTASTART != 0 {
-			start := windows.ImmGetCompositionValue(imc, windows.GCS_DELTASTART)
-			comp.Start = state.RunesIndex(state.UTF16Index(comp.Start) + start)
-		}
-		w.w.SetComposingRegion(comp)
-		if lParam&windows.GCS_CURSORPOS != 0 {
-			rel := windows.ImmGetCompositionValue(imc, windows.GCS_CURSORPOS)
-			pos := state.RunesIndex(state.UTF16Index(rng.Start) + rel)
-			w.w.SetEditorSelection(key.Range{Start: pos, End: pos})
-		}
-		return windows.TRUE
-	case windows.WM_IME_ENDCOMPOSITION:
-		w.w.SetComposingRegion(key.Range{Start: -1, End: -1})
-		return windows.TRUE
 	}
 
 	return windows.DefWindowProc(hwnd, msg, wParam, lParam)
@@ -501,17 +408,6 @@ loop:
 	return nil
 }
 
-func (w *window) EditorStateChanged(old, new editorState) {
-	imc := windows.ImmGetContext(w.hwnd)
-	if imc == 0 {
-		return
-	}
-	defer windows.ImmReleaseContext(w.hwnd, imc)
-	if old.Selection.Range != new.Selection.Range || old.Snippet != new.Snippet {
-		windows.ImmNotifyIME(imc, windows.NI_COMPOSITIONSTR, windows.CPS_CANCEL, 0)
-	}
-}
-
 func (w *window) SetAnimating(anim bool) {
 	w.animating = anim
 }
@@ -530,6 +426,16 @@ func (w *window) setStage(s system.Stage) {
 }
 
 func (w *window) draw(sync bool) {
+	var r windows.Rect
+	windows.GetClientRect(w.hwnd, &r)
+	size := image.Point{
+		X: int(r.Right - r.Left),
+		Y: int(r.Bottom - r.Top),
+	}
+	if size != w.config.Size {
+		w.config.Size = size
+		w.w.Event(ConfigEvent{Config: w.config})
+	}
 	if w.config.Size.X == 0 || w.config.Size.Y == 0 {
 		return
 	}
@@ -587,69 +493,123 @@ func (w *window) readClipboard() error {
 }
 
 func (w *window) Configure(options []Option) {
-	oldConfig := w.config
 	dpi := windows.GetSystemDPI()
-	metric := configForDPI(dpi)
-	w.config.apply(metric, options)
-	windows.SetWindowText(w.hwnd, w.config.Title)
-	// Decorations are never disabled.
-	w.config.Decorated = true
+	cfg := configForDPI(dpi)
+	prev := w.config
+	cnf := w.config
+	cnf.apply(cfg, options)
 
-	switch w.config.Mode {
-	case Minimized:
-		windows.ShowWindow(w.hwnd, windows.SW_SHOWMINIMIZED)
+	if cnf.Mode != Fullscreen && prev.Size != cnf.Size {
+		width := int32(cnf.Size.X)
+		height := int32(cnf.Size.Y)
+		w.config.Size = cnf.Size
 
-	case Maximized:
-		// Set window style.
-		style := windows.GetWindowLong(w.hwnd, windows.GWL_STYLE) & (^uintptr(windows.WS_MAXIMIZE))
-		windows.SetWindowLong(w.hwnd, windows.GWL_STYLE, style|windows.WS_OVERLAPPEDWINDOW)
-		mi := windows.GetMonitorInfo(w.hwnd).Monitor
-		w.config.Size = image.Point{X: int(mi.Right - mi.Left), Y: int(mi.Bottom - mi.Top)}
-		windows.ShowWindow(w.hwnd, windows.SW_SHOWMAXIMIZED)
+		// Include the window decorations.
+		wr := windows.Rect{
+			Right:  width,
+			Bottom: height,
+		}
+		dwStyle := uint32(windows.WS_OVERLAPPEDWINDOW)
+		dwExStyle := uint32(windows.WS_EX_APPWINDOW | windows.WS_EX_WINDOWEDGE)
+		windows.AdjustWindowRectEx(&wr, dwStyle, 0, dwExStyle)
 
+		dw, dh := width, height
+		width = wr.Right - wr.Left
+		height = wr.Bottom - wr.Top
+		w.deltas.width = width - dw
+		w.deltas.height = height - dh
+
+		windows.MoveWindow(w.hwnd, 0, 0, width, height, true)
+	}
+	if prev.MinSize != cnf.MinSize {
+		w.config.MinSize = cnf.MinSize
+	}
+	if prev.MaxSize != cnf.MaxSize {
+		w.config.MaxSize = cnf.MaxSize
+	}
+	if prev.Title != cnf.Title {
+		w.config.Title = cnf.Title
+		windows.SetWindowText(w.hwnd, cnf.Title)
+	}
+	if prev.Mode != cnf.Mode {
+		w.SetWindowMode(cnf.Mode)
+	}
+	if w.config != prev {
+		w.w.Event(ConfigEvent{Config: w.config})
+	}
+}
+
+// Maximize the window. It will have no effect when in fullscreen mode.
+func (w *window) Maximize() {
+	if w.config.Mode == Fullscreen {
+		return
+	}
+	style := windows.GetWindowLong(w.hwnd)
+	windows.SetWindowLong(w.hwnd, windows.GWL_STYLE, style|windows.WS_OVERLAPPEDWINDOW|windows.WS_MAXIMIZE)
+	mi := windows.GetMonitorInfo(w.hwnd)
+	windows.SetWindowPos(w.hwnd, 0,
+		mi.Monitor.Left, mi.Monitor.Top,
+		mi.Monitor.Right-mi.Monitor.Left,
+		mi.Monitor.Bottom-mi.Monitor.Top,
+		windows.SWP_NOOWNERZORDER|windows.SWP_FRAMECHANGED,
+	)
+}
+
+// Center will place window at monitor center.
+func (w *window) Center() {
+	// Make sure that the window is sizeable
+	style := windows.GetWindowLong(w.hwnd) & (^uintptr(windows.WS_MAXIMIZE))
+	windows.SetWindowLong(w.hwnd, windows.GWL_STYLE, style|windows.WS_OVERLAPPEDWINDOW)
+
+	// Find with/height including the window decorations.
+	wr := windows.Rect{
+		Right:  int32(w.config.Size.X),
+		Bottom: int32(w.config.Size.Y),
+	}
+	dwStyle := uint32(windows.WS_OVERLAPPEDWINDOW)
+	dwExStyle := uint32(windows.WS_EX_APPWINDOW | windows.WS_EX_WINDOWEDGE)
+	windows.AdjustWindowRectEx(&wr, dwStyle, 0, dwExStyle)
+	width := wr.Right - wr.Left
+	height := wr.Bottom - wr.Top
+
+	// Move to center of current monitor
+	mi := windows.GetMonitorInfo(w.hwnd).Monitor
+	x := mi.Left + (mi.Right-mi.Left-width)/2
+	y := mi.Top + (mi.Bottom-mi.Top-height)/2
+	windows.MoveWindow(w.hwnd, x, y, width, height, true)
+}
+
+func (w *window) SetWindowMode(mode WindowMode) {
+	// https://devblogs.microsoft.com/oldnewthing/20100412-00/?p=14353
+	switch mode {
 	case Windowed:
-		windows.SetWindowText(w.hwnd, w.config.Title)
-		// Set window style.
-		style := windows.GetWindowLong(w.hwnd, windows.GWL_STYLE) & (^uintptr(windows.WS_MAXIMIZE))
+		if w.placement == nil {
+			return
+		}
+		w.config.Mode = Windowed
+		windows.SetWindowPlacement(w.hwnd, w.placement)
+		w.placement = nil
+		style := windows.GetWindowLong(w.hwnd)
 		windows.SetWindowLong(w.hwnd, windows.GWL_STYLE, style|windows.WS_OVERLAPPEDWINDOW)
-		// Get target for client areaa size.
-		width := int32(w.config.Size.X)
-		height := int32(w.config.Size.Y)
-		// Get the current window size and position.
-		wr := windows.GetWindowRect(w.hwnd)
-		// Set desired window size.
-		wr.Right = wr.Left + width
-		wr.Bottom = wr.Top + height
-		// Convert from client size to window size.
-		r := wr
-		windows.AdjustWindowRectEx(&r, windows.WS_OVERLAPPEDWINDOW, 0, windows.WS_EX_APPWINDOW|windows.WS_EX_WINDOWEDGE)
-		// Calculate difference between client and full window sizes.
-		w.deltas.width = r.Right - wr.Right + wr.Left - r.Left
-		w.deltas.height = r.Bottom - wr.Bottom + wr.Top - r.Top
-		// Set new window size and position.
-		x := wr.Left
-		y := wr.Top
-		dx := r.Right - r.Left
-		dy := r.Bottom - r.Top
-		windows.SetWindowPos(w.hwnd, 0, x, y, dx, dy, windows.SWP_NOOWNERZORDER|windows.SWP_FRAMECHANGED)
-		windows.ShowWindow(w.hwnd, windows.SW_SHOWNORMAL)
-
+		windows.SetWindowPos(w.hwnd, windows.HWND_TOPMOST,
+			0, 0, 0, 0,
+			windows.SWP_NOOWNERZORDER|windows.SWP_FRAMECHANGED,
+		)
 	case Fullscreen:
-		style := windows.GetWindowLong(w.hwnd, windows.GWL_STYLE)
+		if w.placement != nil {
+			return
+		}
+		w.config.Mode = Fullscreen
+		w.placement = windows.GetWindowPlacement(w.hwnd)
+		style := windows.GetWindowLong(w.hwnd)
 		windows.SetWindowLong(w.hwnd, windows.GWL_STYLE, style&^windows.WS_OVERLAPPEDWINDOW)
 		mi := windows.GetMonitorInfo(w.hwnd)
-		w.config.Size = image.Point{X: int(mi.Monitor.Right - mi.Monitor.Left), Y: int(mi.Monitor.Bottom - mi.Monitor.Top)}
 		windows.SetWindowPos(w.hwnd, 0,
 			mi.Monitor.Left, mi.Monitor.Top,
 			mi.Monitor.Right-mi.Monitor.Left,
 			mi.Monitor.Bottom-mi.Monitor.Top,
 			windows.SWP_NOOWNERZORDER|windows.SWP_FRAMECHANGED,
 		)
-		windows.ShowWindow(w.hwnd, windows.SW_SHOW)
-	}
-	// A config event is sent to the main event loop whenever the configuration is changed
-	if oldConfig != w.config {
-		w.w.Event(ConfigEvent{Config: w.config})
 	}
 }
 
@@ -679,7 +639,11 @@ func (w *window) writeClipboard(s string) error {
 		windows.GlobalFree(mem)
 		return err
 	}
-	u16v := unsafe.Slice((*uint16)(ptr), len(u16))
+	var u16v []uint16
+	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&u16v))
+	hdr.Data = ptr
+	hdr.Cap = len(u16)
+	hdr.Len = len(u16)
 	copy(u16v, u16)
 	windows.GlobalUnlock(mem)
 	if err := windows.SetClipboardData(windows.CF_UNICODETEXT, mem); err != nil {
@@ -689,8 +653,8 @@ func (w *window) writeClipboard(s string) error {
 	return nil
 }
 
-func (w *window) SetCursor(cursor pointer.Cursor) {
-	c, err := loadCursor(cursor)
+func (w *window) SetCursor(name pointer.CursorName) {
+	c, err := loadCursor(name)
 	if err != nil {
 		c = resources.cursor
 	}
@@ -700,45 +664,29 @@ func (w *window) SetCursor(cursor pointer.Cursor) {
 	}
 }
 
-// windowsCursor contains mapping from pointer.Cursor to an IDC.
-var windowsCursor = [...]uint16{
-	pointer.CursorDefault:                  windows.IDC_ARROW,
-	pointer.CursorNone:                     0,
-	pointer.CursorText:                     windows.IDC_IBEAM,
-	pointer.CursorVerticalText:             windows.IDC_IBEAM,
-	pointer.CursorPointer:                  windows.IDC_HAND,
-	pointer.CursorCrosshair:                windows.IDC_CROSS,
-	pointer.CursorAllScroll:                windows.IDC_SIZEALL,
-	pointer.CursorColResize:                windows.IDC_SIZEWE,
-	pointer.CursorRowResize:                windows.IDC_SIZENS,
-	pointer.CursorGrab:                     windows.IDC_SIZEALL,
-	pointer.CursorGrabbing:                 windows.IDC_SIZEALL,
-	pointer.CursorNotAllowed:               windows.IDC_NO,
-	pointer.CursorWait:                     windows.IDC_WAIT,
-	pointer.CursorProgress:                 windows.IDC_APPSTARTING,
-	pointer.CursorNorthWestResize:          windows.IDC_SIZENWSE,
-	pointer.CursorNorthEastResize:          windows.IDC_SIZENESW,
-	pointer.CursorSouthWestResize:          windows.IDC_SIZENESW,
-	pointer.CursorSouthEastResize:          windows.IDC_SIZENWSE,
-	pointer.CursorNorthSouthResize:         windows.IDC_SIZENS,
-	pointer.CursorEastWestResize:           windows.IDC_SIZEWE,
-	pointer.CursorWestResize:               windows.IDC_SIZEWE,
-	pointer.CursorEastResize:               windows.IDC_SIZEWE,
-	pointer.CursorNorthResize:              windows.IDC_SIZENS,
-	pointer.CursorSouthResize:              windows.IDC_SIZENS,
-	pointer.CursorNorthEastSouthWestResize: windows.IDC_SIZENESW,
-	pointer.CursorNorthWestSouthEastResize: windows.IDC_SIZENWSE,
-}
-
-func loadCursor(cursor pointer.Cursor) (syscall.Handle, error) {
-	switch cursor {
+func loadCursor(name pointer.CursorName) (syscall.Handle, error) {
+	var curID uint16
+	switch name {
+	default:
+		fallthrough
 	case pointer.CursorDefault:
 		return resources.cursor, nil
+	case pointer.CursorText:
+		curID = windows.IDC_IBEAM
+	case pointer.CursorPointer:
+		curID = windows.IDC_HAND
+	case pointer.CursorCrossHair:
+		curID = windows.IDC_CROSS
+	case pointer.CursorColResize:
+		curID = windows.IDC_SIZEWE
+	case pointer.CursorRowResize:
+		curID = windows.IDC_SIZENS
+	case pointer.CursorGrab:
+		curID = windows.IDC_SIZEALL
 	case pointer.CursorNone:
 		return 0, nil
-	default:
-		return windows.LoadCursor(windowsCursor[cursor])
 	}
+	return windows.LoadCursor(curID)
 }
 
 func (w *window) ShowTextInput(show bool) {}
@@ -757,28 +705,7 @@ func (w *window) Close() {
 	windows.PostMessage(w.hwnd, windows.WM_CLOSE, 0, 0)
 }
 
-func (w *window) Perform(acts system.Action) {
-	walkActions(acts, func(a system.Action) {
-		switch a {
-		case system.ActionCenter:
-			if w.config.Mode != Windowed {
-				break
-			}
-			r := windows.GetWindowRect(w.hwnd)
-			dx := r.Right - r.Left
-			dy := r.Bottom - r.Top
-			// Calculate center position on current monitor.
-			mi := windows.GetMonitorInfo(w.hwnd).Monitor
-			x := (mi.Right - mi.Left - dx) / 2
-			y := (mi.Bottom - mi.Top - dy) / 2
-			windows.SetWindowPos(w.hwnd, 0, x, y, dx, dy, windows.SWP_NOOWNERZORDER|windows.SWP_FRAMECHANGED)
-		case system.ActionRaise:
-			w.raise()
-		}
-	})
-}
-
-func (w *window) raise() {
+func (w *window) Raise() {
 	windows.SetForegroundWindow(w.hwnd)
 	windows.SetWindowPos(w.hwnd, windows.HWND_TOPMOST, 0, 0, 0, 0,
 		windows.SWP_NOMOVE|windows.SWP_NOSIZE|windows.SWP_SHOWWINDOW)
@@ -789,7 +716,6 @@ func convertKeyCode(code uintptr) (string, bool) {
 		return string(rune(code)), true
 	}
 	var r string
-
 	switch code {
 	case windows.VK_ESCAPE:
 		r = key.NameEscape
@@ -816,29 +742,29 @@ func convertKeyCode(code uintptr) (string, bool) {
 	case windows.VK_NEXT:
 		r = key.NamePageDown
 	case windows.VK_F1:
-		r = key.NameF1
+		r = "F1"
 	case windows.VK_F2:
-		r = key.NameF2
+		r = "F2"
 	case windows.VK_F3:
-		r = key.NameF3
+		r = "F3"
 	case windows.VK_F4:
-		r = key.NameF4
+		r = "F4"
 	case windows.VK_F5:
-		r = key.NameF5
+		r = "F5"
 	case windows.VK_F6:
-		r = key.NameF6
+		r = "F6"
 	case windows.VK_F7:
-		r = key.NameF7
+		r = "F7"
 	case windows.VK_F8:
-		r = key.NameF8
+		r = "F8"
 	case windows.VK_F9:
-		r = key.NameF9
+		r = "F9"
 	case windows.VK_F10:
-		r = key.NameF10
+		r = "F10"
 	case windows.VK_F11:
-		r = key.NameF11
+		r = "F11"
 	case windows.VK_F12:
-		r = key.NameF12
+		r = "F12"
 	case windows.VK_TAB:
 		r = key.NameTab
 	case windows.VK_SPACE:
@@ -865,14 +791,6 @@ func convertKeyCode(code uintptr) (string, bool) {
 		r = "]"
 	case windows.VK_OEM_7:
 		r = "'"
-	case windows.VK_CONTROL:
-		r = key.NameCtrl
-	case windows.VK_SHIFT:
-		r = key.NameShift
-	case windows.VK_MENU:
-		r = key.NameAlt
-	case windows.VK_LWIN, windows.VK_RWIN:
-		r = key.NameSuper
 	default:
 		return "", false
 	}

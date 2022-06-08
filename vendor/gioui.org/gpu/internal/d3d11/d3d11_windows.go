@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"reflect"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -849,5 +850,10 @@ func toBlendFactor(f driver.BlendFactor) (uint32, uint32) {
 
 // sliceOf returns a slice from a (native) pointer.
 func sliceOf(ptr uintptr, cap int) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(ptr)), cap)
+	var data []byte
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&data))
+	h.Data = ptr
+	h.Cap = cap
+	h.Len = cap
+	return data
 }

@@ -6,7 +6,7 @@ package app
 #include <Foundation/Foundation.h>
 
 __attribute__ ((visibility ("hidden"))) void gio_wakeupMainThread(void);
-__attribute__ ((visibility ("hidden"))) CFTypeRef gio_createDisplayLink(uintptr_t handle);
+__attribute__ ((visibility ("hidden"))) CFTypeRef gio_createDisplayLink(void);
 __attribute__ ((visibility ("hidden"))) void gio_releaseDisplayLink(CFTypeRef dl);
 __attribute__ ((visibility ("hidden"))) int gio_startDisplayLink(CFTypeRef dl);
 __attribute__ ((visibility ("hidden"))) int gio_stopDisplayLink(CFTypeRef dl);
@@ -28,21 +28,11 @@ static void nsstringGetCharacters(CFTypeRef cstr, unichar *chars, NSUInteger loc
 	NSString *str = (__bridge NSString *)cstr;
 	[str getCharacters:chars range:NSMakeRange(loc, length)];
 }
-
-static CFTypeRef newNSString(unichar *chars, NSUInteger length) {
-	@autoreleasepool {
-		NSString *s = [NSString string];
-		if (length > 0) {
-			s = [NSString stringWithCharacters:chars length:length];
-		}
-		return CFBridgingRetain(s);
-	}
-}
 */
 import "C"
 import (
 	"errors"
-	"runtime/cgo"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf16"
@@ -70,6 +60,9 @@ type displayLink struct {
 	running uint32
 }
 
+// displayLinks maps CFTypeRefs to *displayLinks.
+var displayLinks sync.Map
+
 var mainFuncs = make(chan func(), 1)
 
 // runOnMain runs the function on the main thread.
@@ -96,11 +89,13 @@ func gio_dispatchMainFuncs() {
 	}
 }
 
-// nsstringToString converts a NSString to a Go string.
+// nsstringToString converts a NSString to a Go string, and
+// releases the original string.
 func nsstringToString(str C.CFTypeRef) string {
 	if str == 0 {
 		return ""
 	}
+	defer C.CFRelease(str)
 	n := C.nsstringLength(str)
 	if n == 0 {
 		return ""
@@ -111,16 +106,6 @@ func nsstringToString(str C.CFTypeRef) string {
 	return string(utf8)
 }
 
-// stringToNSString converts a Go string to a retained NSString.
-func stringToNSString(str string) C.CFTypeRef {
-	u16 := utf16.Encode([]rune(str))
-	var chars *C.unichar
-	if len(u16) > 0 {
-		chars = (*C.unichar)(unsafe.Pointer(&u16[0]))
-	}
-	return C.newNSString(chars, C.NSUInteger(len(u16)))
-}
-
 func NewDisplayLink(callback func()) (*displayLink, error) {
 	d := &displayLink{
 		callback: callback,
@@ -128,18 +113,18 @@ func NewDisplayLink(callback func()) (*displayLink, error) {
 		states:   make(chan bool),
 		dids:     make(chan uint64),
 	}
-	h := cgo.NewHandle(d)
-	dl := C.gio_createDisplayLink(C.uintptr_t(h))
+	dl := C.gio_createDisplayLink()
 	if dl == 0 {
 		return nil, errors.New("app: failed to create display link")
 	}
-	go d.run(dl, h)
+	go d.run(dl)
 	return d, nil
 }
 
-func (d *displayLink) run(dl C.CFTypeRef, h cgo.Handle) {
+func (d *displayLink) run(dl C.CFTypeRef) {
 	defer C.gio_releaseDisplayLink(dl)
-	defer h.Delete()
+	displayLinks.Store(dl, d)
+	defer displayLinks.Delete(dl)
 	var stopTimer *time.Timer
 	var tchan <-chan time.Time
 	started := false
@@ -200,56 +185,48 @@ func (d *displayLink) SetDisplayID(did uint64) {
 }
 
 //export gio_onFrameCallback
-func gio_onFrameCallback(dl C.CFTypeRef, handle C.uintptr_t) {
-	d := cgo.Handle(handle).Value().(*displayLink)
-	if atomic.LoadUint32(&d.running) != 0 {
-		d.callback()
+func gio_onFrameCallback(dl C.CFTypeRef) {
+	if d, exists := displayLinks.Load(dl); exists {
+		d := d.(*displayLink)
+		if atomic.LoadUint32(&d.running) != 0 {
+			d.callback()
+		}
 	}
-}
-
-var macosCursorID = [...]byte{
-	pointer.CursorDefault:                  0,
-	pointer.CursorNone:                     1,
-	pointer.CursorText:                     2,
-	pointer.CursorVerticalText:             3,
-	pointer.CursorPointer:                  4,
-	pointer.CursorCrosshair:                5,
-	pointer.CursorAllScroll:                6,
-	pointer.CursorColResize:                7,
-	pointer.CursorRowResize:                8,
-	pointer.CursorGrab:                     9,
-	pointer.CursorGrabbing:                 10,
-	pointer.CursorNotAllowed:               11,
-	pointer.CursorWait:                     12,
-	pointer.CursorProgress:                 13,
-	pointer.CursorNorthWestResize:          14,
-	pointer.CursorNorthEastResize:          15,
-	pointer.CursorSouthWestResize:          16,
-	pointer.CursorSouthEastResize:          17,
-	pointer.CursorNorthSouthResize:         18,
-	pointer.CursorEastWestResize:           19,
-	pointer.CursorWestResize:               20,
-	pointer.CursorEastResize:               21,
-	pointer.CursorNorthResize:              22,
-	pointer.CursorSouthResize:              23,
-	pointer.CursorNorthEastSouthWestResize: 24,
-	pointer.CursorNorthWestSouthEastResize: 25,
 }
 
 // windowSetCursor updates the cursor from the current one to a new one
 // and returns the new one.
-func windowSetCursor(from, to pointer.Cursor) pointer.Cursor {
+func windowSetCursor(from, to pointer.CursorName) pointer.CursorName {
 	if from == to {
 		return to
 	}
-	if to == pointer.CursorNone {
+	var curID int
+	switch to {
+	default:
+		to = pointer.CursorDefault
+		fallthrough
+	case pointer.CursorDefault:
+		curID = 1
+	case pointer.CursorText:
+		curID = 2
+	case pointer.CursorPointer:
+		curID = 3
+	case pointer.CursorCrossHair:
+		curID = 4
+	case pointer.CursorColResize:
+		curID = 5
+	case pointer.CursorRowResize:
+		curID = 6
+	case pointer.CursorGrab:
+		curID = 7
+	case pointer.CursorNone:
 		C.gio_hideCursor()
 		return to
 	}
 	if from == pointer.CursorNone {
 		C.gio_showCursor()
 	}
-	C.gio_setCursor(C.NSUInteger(macosCursorID[to]))
+	C.gio_setCursor(C.NSUInteger(curID))
 	return to
 }
 

@@ -85,6 +85,13 @@ func FPt(p image.Point) f32.Point {
 	}
 }
 
+// FRect converts a rectangle to a f32.Rectangle.
+func FRect(r image.Rectangle) f32.Rectangle {
+	return f32.Rectangle{
+		Min: FPt(r.Min), Max: FPt(r.Max),
+	}
+}
+
 // Constrain a size so each dimension is in the range [min;max].
 func (c Constraints) Constrain(size image.Point) image.Point {
 	if min := c.Min.X; size.X < min {
@@ -106,15 +113,15 @@ func (c Constraints) Constrain(size image.Point) image.Point {
 // constraints. The minimum constraints will be adjusted to ensure
 // they do not exceed the maximum.
 type Inset struct {
-	Top, Bottom, Left, Right unit.Dp
+	Top, Right, Bottom, Left unit.Value
 }
 
 // Layout a widget.
 func (in Inset) Layout(gtx Context, w Widget) Dimensions {
-	top := gtx.Dp(in.Top)
-	right := gtx.Dp(in.Right)
-	bottom := gtx.Dp(in.Bottom)
-	left := gtx.Dp(in.Left)
+	top := gtx.Px(in.Top)
+	right := gtx.Px(in.Right)
+	bottom := gtx.Px(in.Bottom)
+	left := gtx.Px(in.Left)
 	mcs := gtx.Constraints
 	mcs.Max.X -= left + right
 	if mcs.Max.X < 0 {
@@ -135,7 +142,7 @@ func (in Inset) Layout(gtx Context, w Widget) Dimensions {
 		mcs.Min.Y = mcs.Max.Y
 	}
 	gtx.Constraints = mcs
-	trans := op.Offset(image.Pt(left, top)).Push(gtx.Ops)
+	trans := op.Offset(FPt(image.Point{X: left, Y: top})).Push(gtx.Ops)
 	dims := w(gtx)
 	trans.Pop()
 	return Dimensions{
@@ -146,7 +153,7 @@ func (in Inset) Layout(gtx Context, w Widget) Dimensions {
 
 // UniformInset returns an Inset with a single inset applied to all
 // edges.
-func UniformInset(v unit.Dp) Inset {
+func UniformInset(v unit.Value) Inset {
 	return Inset{Top: v, Right: v, Bottom: v, Left: v}
 }
 
@@ -174,7 +181,7 @@ func (d Direction) Layout(gtx Context, w Widget) Dimensions {
 	}
 
 	p := d.Position(dims.Size, sz)
-	defer op.Offset(p).Push(gtx.Ops).Pop()
+	defer op.Offset(FPt(p)).Push(gtx.Ops).Pop()
 	call.Add(gtx.Ops)
 
 	return Dimensions{
@@ -206,14 +213,14 @@ func (d Direction) Position(widget, bounds image.Point) image.Point {
 
 // Spacer adds space between widgets.
 type Spacer struct {
-	Width, Height unit.Dp
+	Width, Height unit.Value
 }
 
 func (s Spacer) Layout(gtx Context) Dimensions {
 	return Dimensions{
 		Size: image.Point{
-			X: gtx.Dp(s.Width),
-			Y: gtx.Dp(s.Height),
+			X: gtx.Px(s.Width),
+			Y: gtx.Px(s.Height),
 		},
 	}
 }

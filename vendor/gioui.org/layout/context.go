@@ -3,9 +3,9 @@
 package layout
 
 import (
-	"image"
 	"time"
 
+	"gioui.org/f32"
 	"gioui.org/io/event"
 	"gioui.org/io/system"
 	"gioui.org/op"
@@ -27,11 +27,6 @@ type Context struct {
 	// Now is the animation time.
 	Now time.Time
 
-	// Locale provides information on the system's language preferences.
-	// BUG(whereswaldon): this field is not currently populated automatically.
-	// Interested users must look up and populate these values manually.
-	Locale system.Locale
-
 	*op.Ops
 }
 
@@ -52,15 +47,15 @@ func NewContext(ops *op.Ops, e system.FrameEvent) Context {
 	size := e.Size
 
 	if e.Insets != (system.Insets{}) {
-		left := e.Metric.Dp(e.Insets.Left)
-		top := e.Metric.Dp(e.Insets.Top)
-		op.Offset(image.Point{
-			X: left,
-			Y: top,
+		left := e.Metric.Px(e.Insets.Left)
+		top := e.Metric.Px(e.Insets.Top)
+		op.Offset(f32.Point{
+			X: float32(left),
+			Y: float32(top),
 		}).Add(ops)
 
-		size.X -= left + e.Metric.Dp(e.Insets.Right)
-		size.Y -= top + e.Metric.Dp(e.Insets.Bottom)
+		size.X -= left + e.Metric.Px(e.Insets.Right)
+		size.Y -= top + e.Metric.Px(e.Insets.Bottom)
 	}
 
 	return Context{
@@ -72,14 +67,9 @@ func NewContext(ops *op.Ops, e system.FrameEvent) Context {
 	}
 }
 
-// Dp converts v to pixels.
-func (c Context) Dp(v unit.Dp) int {
-	return c.Metric.Dp(v)
-}
-
-// Sp converts v to pixels.
-func (c Context) Sp(v unit.Sp) int {
-	return c.Metric.Sp(v)
+// Px maps the value to pixels.
+func (c Context) Px(v unit.Value) int {
+	return c.Metric.Px(v)
 }
 
 // Events returns the events available for the key. If no

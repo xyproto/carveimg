@@ -22,11 +22,9 @@ type Ops struct {
 	// nextStateID is the id allocated for the next
 	// StateOp.
 	nextStateID int
-	// multipOp indicates a multi-op such as clip.Path is being added.
-	multipOp bool
 
 	macroStack stack
-	stacks     [_StackKind]stack
+	stacks     [4]stack
 }
 
 type OpType byte
@@ -53,9 +51,6 @@ const (
 	TypePointerInput
 	TypeClipboardRead
 	TypeClipboardWrite
-	TypeSource
-	TypeTarget
-	TypeOffer
 	TypeKeyInput
 	TypeKeyFocus
 	TypeKeySoftKeyboard
@@ -68,13 +63,6 @@ const (
 	TypeCursor
 	TypePath
 	TypeStroke
-	TypeSemanticLabel
-	TypeSemanticDesc
-	TypeSemanticClass
-	TypeSemanticSelected
-	TypeSemanticDisabled
-	TypeSnippet
-	TypeSelection
 )
 
 type StackID struct {
@@ -82,7 +70,7 @@ type StackID struct {
 	prev int
 }
 
-// StateOp represents a saved operation snapshot to be restored
+// StateOp represents a saved operation snapshop to be restored
 // later.
 type StateOp struct {
 	id      int
@@ -110,7 +98,6 @@ const (
 	ClipStack StackKind = iota
 	TransStack
 	PassStack
-	_StackKind
 )
 
 const (
@@ -120,44 +107,34 @@ const (
 )
 
 const (
-	TypeMacroLen            = 1 + 4 + 4
-	TypeCallLen             = 1 + 4 + 4 + 4 + 4
-	TypeDeferLen            = 1
-	TypePushTransformLen    = 1 + 4*6
-	TypeTransformLen        = 1 + 1 + 4*6
-	TypePopTransformLen     = 1
-	TypeRedrawLen           = 1 + 8
-	TypeImageLen            = 1
-	TypePaintLen            = 1
-	TypeColorLen            = 1 + 4
-	TypeLinearGradientLen   = 1 + 8*2 + 4*2
-	TypePassLen             = 1
-	TypePopPassLen          = 1
-	TypePointerInputLen     = 1 + 1 + 1*2 + 2*4 + 2*4
-	TypeClipboardReadLen    = 1
-	TypeClipboardWriteLen   = 1
-	TypeSourceLen           = 1
-	TypeTargetLen           = 1
-	TypeOfferLen            = 1
-	TypeKeyInputLen         = 1 + 1
-	TypeKeyFocusLen         = 1 + 1
-	TypeKeySoftKeyboardLen  = 1 + 1
-	TypeSaveLen             = 1 + 4
-	TypeLoadLen             = 1 + 4
-	TypeAuxLen              = 1
-	TypeClipLen             = 1 + 4*4 + 1 + 1
-	TypePopClipLen          = 1
-	TypeProfileLen          = 1
-	TypeCursorLen           = 2
-	TypePathLen             = 8 + 1
-	TypeStrokeLen           = 1 + 4
-	TypeSemanticLabelLen    = 1
-	TypeSemanticDescLen     = 1
-	TypeSemanticClassLen    = 2
-	TypeSemanticSelectedLen = 2
-	TypeSemanticDisabledLen = 2
-	TypeSnippetLen          = 1 + 4 + 4
-	TypeSelectionLen        = 1 + 2*4 + 2*4 + 4 + 4
+	TypeMacroLen           = 1 + 4 + 4
+	TypeCallLen            = 1 + 4 + 4
+	TypeDeferLen           = 1
+	TypePushTransformLen   = 1 + 4*6
+	TypeTransformLen       = 1 + 1 + 4*6
+	TypePopTransformLen    = 1
+	TypeRedrawLen          = 1 + 8
+	TypeImageLen           = 1
+	TypePaintLen           = 1
+	TypeColorLen           = 1 + 4
+	TypeLinearGradientLen  = 1 + 8*2 + 4*2
+	TypePassLen            = 1
+	TypePopPassLen         = 1
+	TypePointerInputLen    = 1 + 1 + 1*2 + 2*4 + 2*4
+	TypeClipboardReadLen   = 1
+	TypeClipboardWriteLen  = 1
+	TypeKeyInputLen        = 1 + 1
+	TypeKeyFocusLen        = 1 + 1
+	TypeKeySoftKeyboardLen = 1 + 1
+	TypeSaveLen            = 1 + 4
+	TypeLoadLen            = 1 + 4
+	TypeAuxLen             = 1
+	TypeClipLen            = 1 + 4*4 + 1 + 1
+	TypePopClipLen         = 1
+	TypeProfileLen         = 1
+	TypeCursorLen          = 1 + 1
+	TypePathLen            = 8 + 1
+	TypeStrokeLen          = 1 + 4
 )
 
 func (op *ClipOp) Decode(data []byte) {
@@ -184,7 +161,9 @@ func (op *ClipOp) Decode(data []byte) {
 
 func Reset(o *Ops) {
 	o.macroStack = stack{}
-	o.stacks = [_StackKind]stack{}
+	for i := range o.stacks {
+		o.stacks[i] = stack{}
+	}
 	// Leave references to the GC.
 	for i := range o.refs {
 		o.refs[i] = nil
@@ -196,31 +175,6 @@ func Reset(o *Ops) {
 }
 
 func Write(o *Ops, n int) []byte {
-	if o.multipOp {
-		panic("cannot mix multi ops with single ones")
-	}
-	o.data = append(o.data, make([]byte, n)...)
-	return o.data[len(o.data)-n:]
-}
-
-func BeginMulti(o *Ops) {
-	if o.multipOp {
-		panic("cannot interleave multi ops")
-	}
-	o.multipOp = true
-}
-
-func EndMulti(o *Ops) {
-	if !o.multipOp {
-		panic("cannot end non multi ops")
-	}
-	o.multipOp = false
-}
-
-func WriteMulti(o *Ops, n int) []byte {
-	if !o.multipOp {
-		panic("cannot use multi ops in single ops")
-	}
 	o.data = append(o.data, make([]byte, n)...)
 	return o.data[len(o.data)-n:]
 }
@@ -244,14 +198,12 @@ func FillMacro(o *Ops, startPC PC) {
 	bo.PutUint32(data[5:], uint32(pc.refs))
 }
 
-func AddCall(o *Ops, callOps *Ops, pc PC, end PC) {
+func AddCall(o *Ops, callOps *Ops, pc PC) {
 	data := Write1(o, TypeCallLen, callOps)
 	data[0] = byte(TypeCall)
 	bo := binary.LittleEndian
 	bo.PutUint32(data[1:], uint32(pc.data))
 	bo.PutUint32(data[5:], uint32(pc.refs))
-	bo.PutUint32(data[9:], uint32(end.data))
-	bo.PutUint32(data[13:], uint32(end.refs))
 }
 
 func PushOp(o *Ops, kind StackKind) (StackID, int) {
@@ -274,12 +226,6 @@ func Write1(o *Ops, n int, ref1 interface{}) []byte {
 func Write2(o *Ops, n int, ref1, ref2 interface{}) []byte {
 	o.data = append(o.data, make([]byte, n)...)
 	o.refs = append(o.refs, ref1, ref2)
-	return o.data[len(o.data)-n:]
-}
-
-func Write3(o *Ops, n int, ref1, ref2, ref3 interface{}) []byte {
-	o.data = append(o.data, make([]byte, n)...)
-	o.refs = append(o.refs, ref1, ref2, ref3)
 	return o.data[len(o.data)-n:]
 }
 
@@ -323,7 +269,7 @@ func Save(o *Ops) StateOp {
 	return s
 }
 
-// Load a previously saved operations state given
+// load a previously saved operations state given
 // its ID.
 func (s StateOp) Load() {
 	bo := binary.LittleEndian
@@ -396,9 +342,6 @@ func (t OpType) Size() int {
 		TypePointerInputLen,
 		TypeClipboardReadLen,
 		TypeClipboardWriteLen,
-		TypeSourceLen,
-		TypeTargetLen,
-		TypeOfferLen,
 		TypeKeyInputLen,
 		TypeKeyFocusLen,
 		TypeKeySoftKeyboardLen,
@@ -411,24 +354,15 @@ func (t OpType) Size() int {
 		TypeCursorLen,
 		TypePathLen,
 		TypeStrokeLen,
-		TypeSemanticLabelLen,
-		TypeSemanticDescLen,
-		TypeSemanticClassLen,
-		TypeSemanticSelectedLen,
-		TypeSemanticDisabledLen,
-		TypeSnippetLen,
-		TypeSelectionLen,
 	}[t-firstOpIndex]
 }
 
 func (t OpType) NumRefs() int {
 	switch t {
-	case TypeKeyFocus, TypePointerInput, TypeProfile, TypeCall, TypeClipboardRead, TypeClipboardWrite, TypeSemanticLabel, TypeSemanticDesc, TypeSelection:
+	case TypeKeyInput, TypeKeyFocus, TypePointerInput, TypeProfile, TypeCall, TypeClipboardRead, TypeClipboardWrite, TypeCursor:
 		return 1
-	case TypeKeyInput, TypeImage, TypeSource, TypeTarget, TypeSnippet:
+	case TypeImage:
 		return 2
-	case TypeOffer:
-		return 3
 	default:
 		return 0
 	}
@@ -468,12 +402,6 @@ func (t OpType) String() string {
 		return "ClipboardRead"
 	case TypeClipboardWrite:
 		return "ClipboardWrite"
-	case TypeSource:
-		return "Source"
-	case TypeTarget:
-		return "Target"
-	case TypeOffer:
-		return "Offer"
 	case TypeKeyInput:
 		return "KeyInput"
 	case TypeKeyFocus:
@@ -498,9 +426,7 @@ func (t OpType) String() string {
 		return "Path"
 	case TypeStroke:
 		return "Stroke"
-	case TypeSemanticLabel:
-		return "SemanticDescription"
 	default:
-		panic("unknown OpType")
+		panic("unnkown OpType")
 	}
 }

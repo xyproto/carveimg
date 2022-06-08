@@ -9,26 +9,15 @@ import (
 	"image/color"
 	"runtime"
 	"time"
-	"unicode"
-	"unicode/utf16"
-	"unicode/utf8"
 
-	"gioui.org/f32"
-	"gioui.org/font/gofont"
 	"gioui.org/gpu"
-	"gioui.org/internal/ops"
 	"gioui.org/io/event"
-	"gioui.org/io/key"
 	"gioui.org/io/pointer"
 	"gioui.org/io/profile"
 	"gioui.org/io/router"
 	"gioui.org/io/system"
-	"gioui.org/layout"
 	"gioui.org/op"
-	"gioui.org/op/clip"
 	"gioui.org/unit"
-	"gioui.org/widget"
-	"gioui.org/widget/material"
 
 	_ "gioui.org/app/internal/log"
 )
@@ -44,82 +33,50 @@ type Window struct {
 	// driverFuncs is a channel of functions to run when
 	// the Window has a valid driver.
 	driverFuncs chan func(d driver)
+	// driverDefers is like driverFuncs for functions that may
+	// block and shouldn't be waited for.
+	driverDefers chan func(d driver)
 	// wakeups wakes up the native event loop to send a
 	// WakeupEvent that flushes driverFuncs.
 	wakeups chan struct{}
-	// wakeupFuncs is sent wakeup functions when the driver changes.
-	wakeupFuncs chan func()
-	// redraws is notified when a redraw is requested by the client.
-	redraws chan struct{}
-	// immediateRedraws is like redraw but doesn't need a wakeup.
-	immediateRedraws chan struct{}
-	// scheduledRedraws is sent the most recent delayed redraw time.
-	scheduledRedraws chan time.Time
 
-	out      chan event.Event
-	frames   chan *op.Ops
-	frameAck chan struct{}
-	closing  bool
+	out         chan event.Event
+	in          chan event.Event
+	ack         chan struct{}
+	invalidates chan struct{}
+	frames      chan *op.Ops
+	frameAck    chan struct{}
 	// dead is closed when the window is destroyed.
 	dead chan struct{}
-	// options are the options waiting to be applied.
-	options []Option
-	// actions are the actions waiting to be performed.
-	actions system.Action
 
 	stage        system.Stage
 	animating    bool
 	hasNextFrame bool
 	nextFrame    time.Time
-	// viewport is the latest frame size with insets applied.
-	viewport image.Rectangle
-	// metric is the metric from the most recent frame.
-	metric unit.Metric
+	delayedDraw  *time.Timer
 
-	queue       queue
-	cursor      pointer.Cursor
-	decorations struct {
-		op.Ops
-		Config
-		*material.Theme
-		*widget.Decorations
-		size image.Point // decorations size
-	}
+	queue  queue
+	cursor pointer.CursorName
 
 	callbacks callbacks
 
 	nocontext bool
-
-	// semantic data, lazily evaluated if requested by a backend to speed up
-	// the cases where semantic data is not needed.
-	semantic struct {
-		// uptodate tracks whether the fields below are up to date.
-		uptodate bool
-		root     router.SemanticID
-		prevTree []router.SemanticNode
-		tree     []router.SemanticNode
-		ids      map[router.SemanticID]router.SemanticNode
-	}
-
-	imeState editorState
-}
-
-type editorState struct {
-	router.EditorState
-	compose key.Range
 }
 
 type callbacks struct {
-	w          *Window
-	d          driver
-	busy       bool
-	waitEvents []event.Event
+	w *Window
+	d driver
 }
 
 // queue is an event.Queue implementation that distributes system events
 // to the input handlers declared in the most recent frame.
 type queue struct {
 	q router.Router
+}
+
+// driverEvent is sent when the underlying driver changes.
+type driverEvent struct {
+	wakeup func()
 }
 
 // Pre-allocate the ack event to avoid garbage.
@@ -129,7 +86,7 @@ var ackEvent event.Event
 // options. The options are hints; the platform is free to
 // ignore or adjust them.
 //
-// If the current program is running on iOS or Android,
+// If the current program is running on iOS and Android,
 // NewWindow returns the window previously created by the
 // platform.
 //
@@ -137,7 +94,7 @@ var ackEvent event.Event
 // iOS, Android, WebAssembly.
 func NewWindow(options ...Option) *Window {
 	defaultOptions := []Option{
-		Size(800, 600),
+		Size(unit.Dp(800), unit.Dp(600)),
 		Title("Gio"),
 	}
 	options = append(defaultOptions, options...)
@@ -145,20 +102,18 @@ func NewWindow(options ...Option) *Window {
 	cnf.apply(unit.Metric{}, options)
 
 	w := &Window{
-		out:              make(chan event.Event),
-		immediateRedraws: make(chan struct{}),
-		redraws:          make(chan struct{}, 1),
-		scheduledRedraws: make(chan time.Time, 1),
-		frames:           make(chan *op.Ops),
-		frameAck:         make(chan struct{}),
-		driverFuncs:      make(chan func(d driver), 1),
-		wakeups:          make(chan struct{}, 1),
-		wakeupFuncs:      make(chan func()),
-		dead:             make(chan struct{}),
-		nocontext:        cnf.CustomRenderer,
+		in:           make(chan event.Event),
+		out:          make(chan event.Event),
+		ack:          make(chan struct{}),
+		invalidates:  make(chan struct{}, 1),
+		frames:       make(chan *op.Ops),
+		frameAck:     make(chan struct{}),
+		driverFuncs:  make(chan func(d driver), 1),
+		driverDefers: make(chan func(d driver), 1),
+		wakeups:      make(chan struct{}, 1),
+		dead:         make(chan struct{}),
+		nocontext:    cnf.CustomRenderer,
 	}
-	w.imeState.compose = key.Range{Start: -1, End: -1}
-	w.semantic.ids = make(map[router.SemanticID]router.SemanticNode)
 	w.callbacks.w = w
 	go w.run(options)
 	return w
@@ -169,7 +124,7 @@ func (w *Window) Events() <-chan event.Event {
 	return w.out
 }
 
-// update the window contents, input operations declare input handlers,
+// update updates the window contents, input operations declare input handlers,
 // and so on. The supplied operations list completely replaces the window state
 // from previous calls.
 func (w *Window) update(frame *op.Ops) {
@@ -177,21 +132,14 @@ func (w *Window) update(frame *op.Ops) {
 	<-w.frameAck
 }
 
-func (w *Window) validateAndProcess(d driver, size image.Point, sync bool, frame *op.Ops, sigChan chan<- struct{}) error {
-	signal := func() {
-		if sigChan != nil {
-			// We're done with frame, let the client continue.
-			sigChan <- struct{}{}
-			// Signal at most once.
-			sigChan = nil
-		}
-	}
-	defer signal()
+func (w *Window) validateAndProcess(frameStart time.Time, size image.Point, sync bool, frame *op.Ops) error {
 	for {
 		if w.gpu == nil && !w.nocontext {
 			var err error
 			if w.ctx == nil {
-				w.ctx, err = d.NewContext()
+				w.driverRun(func(d driver) {
+					w.ctx, err = d.NewContext()
+				})
 				if err != nil {
 					return err
 				}
@@ -199,7 +147,11 @@ func (w *Window) validateAndProcess(d driver, size image.Point, sync bool, frame
 			}
 		}
 		if sync && w.ctx != nil {
-			if err := w.ctx.Refresh(); err != nil {
+			var err error
+			w.driverRun(func(d driver) {
+				err = w.ctx.Refresh()
+			})
+			if err != nil {
 				if errors.Is(err, errOutOfDate) {
 					// Surface couldn't be created for transient reasons. Skip
 					// this frame and wait for the next.
@@ -212,24 +164,21 @@ func (w *Window) validateAndProcess(d driver, size image.Point, sync bool, frame
 				return err
 			}
 		}
-		if w.ctx != nil {
+		if w.gpu == nil && !w.nocontext {
 			if err := w.ctx.Lock(); err != nil {
 				w.destroyGPU()
 				return err
 			}
-		}
-		if w.gpu == nil && !w.nocontext {
 			gpu, err := gpu.New(w.ctx.API())
+			w.ctx.Unlock()
 			if err != nil {
-				w.ctx.Unlock()
 				w.destroyGPU()
 				return err
 			}
 			w.gpu = gpu
 		}
 		if w.gpu != nil {
-			if err := w.frame(frame, size); err != nil {
-				w.ctx.Unlock()
+			if err := w.render(frame, size); err != nil {
 				if errors.Is(err, errOutOfDate) {
 					// GPU surface needs refreshing.
 					sync = true
@@ -242,20 +191,16 @@ func (w *Window) validateAndProcess(d driver, size image.Point, sync bool, frame
 				return err
 			}
 		}
-		w.queue.q.Frame(frame)
-		// Let the client continue as soon as possible, in particular before
-		// a potentially blocking Present.
-		signal()
-		var err error
-		if w.gpu != nil {
-			err = w.ctx.Present()
-			w.ctx.Unlock()
-		}
-		return err
+		w.processFrame(frameStart, frame)
+		return nil
 	}
 }
 
-func (w *Window) frame(frame *op.Ops, viewport image.Point) error {
+func (w *Window) render(frame *op.Ops, viewport image.Point) error {
+	if err := w.ctx.Lock(); err != nil {
+		return err
+	}
+	defer w.ctx.Unlock()
 	if runtime.GOOS == "js" {
 		// Use transparent black when Gio is embedded, to allow mixing of Gio and
 		// foreign content below.
@@ -267,48 +212,47 @@ func (w *Window) frame(frame *op.Ops, viewport image.Point) error {
 	if err != nil {
 		return err
 	}
-	return w.gpu.Frame(frame, target, viewport)
+	if err := w.gpu.Frame(frame, target, viewport); err != nil {
+		return err
+	}
+	return w.ctx.Present()
 }
 
-func (w *Window) processFrame(d driver, frameStart time.Time) {
-	for k := range w.semantic.ids {
-		delete(w.semantic.ids, k)
-	}
-	w.semantic.uptodate = false
-	q := &w.queue.q
-	switch q.TextInputState() {
+func (w *Window) processFrame(frameStart time.Time, frame *op.Ops) {
+	w.queue.q.Frame(frame)
+	switch w.queue.q.TextInputState() {
 	case router.TextInputOpen:
-		d.ShowTextInput(true)
+		w.driverDefer(func(d driver) { d.ShowTextInput(true) })
 	case router.TextInputClose:
-		d.ShowTextInput(false)
+		w.driverDefer(func(d driver) { d.ShowTextInput(false) })
 	}
-	if hint, ok := q.TextInputHint(); ok {
-		d.SetInputHint(hint)
+	if hint, ok := w.queue.q.TextInputHint(); ok {
+		w.driverDefer(func(d driver) { d.SetInputHint(hint) })
 	}
-	if txt, ok := q.WriteClipboard(); ok {
-		d.WriteClipboard(txt)
+	if txt, ok := w.queue.q.WriteClipboard(); ok {
+		w.WriteClipboard(txt)
 	}
-	if q.ReadClipboard() {
-		d.ReadClipboard()
+	if w.queue.q.ReadClipboard() {
+		w.ReadClipboard()
 	}
-	oldState := w.imeState
-	newState := oldState
-	newState.EditorState = q.EditorState()
-	if newState != oldState {
-		w.imeState = newState
-		d.EditorStateChanged(oldState, newState)
-	}
-	if q.Profiling() && w.gpu != nil {
+	if w.queue.q.Profiling() && w.gpu != nil {
 		frameDur := time.Since(frameStart)
 		frameDur = frameDur.Truncate(100 * time.Microsecond)
-		quantum := 100 * time.Microsecond
-		timings := fmt.Sprintf("tot:%7s %s", frameDur.Round(quantum), w.gpu.Profile())
-		q.Queue(profile.Event{Timings: timings})
+		q := 100 * time.Microsecond
+		timings := fmt.Sprintf("tot:%7s %s", frameDur.Round(q), w.gpu.Profile())
+		w.queue.q.Queue(profile.Event{Timings: timings})
 	}
-	if t, ok := q.WakeupTime(); ok {
+	if t, ok := w.queue.q.WakeupTime(); ok {
 		w.setNextFrame(t)
 	}
-	w.updateAnimation(d)
+	// Opportunistically check whether Invalidate has been called, to avoid
+	// stopping and starting animation mode.
+	select {
+	case <-w.invalidates:
+		w.setNextFrame(time.Time{})
+	default:
+	}
+	w.updateAnimation()
 }
 
 // Invalidate the window such that a FrameEvent will be generated immediately.
@@ -321,21 +265,16 @@ func (w *Window) processFrame(d driver, frameStart time.Time) {
 // Invalidate is safe for concurrent use.
 func (w *Window) Invalidate() {
 	select {
-	case w.immediateRedraws <- struct{}{}:
-		return
-	default:
-	}
-	select {
-	case w.redraws <- struct{}{}:
-		w.wakeup()
+	case w.invalidates <- struct{}{}:
 	default:
 	}
 }
 
 // Option applies the options to the window.
 func (w *Window) Option(opts ...Option) {
-	w.options = append(w.options, opts...)
-	w.wakeup()
+	w.driverDefer(func(d driver) {
+		d.Configure(opts)
+	})
 }
 
 // ReadClipboard initiates a read of the clipboard in the form
@@ -354,6 +293,40 @@ func (w *Window) WriteClipboard(s string) {
 	})
 }
 
+// SetCursorName changes the current window cursor to name.
+func (w *Window) SetCursorName(name pointer.CursorName) {
+	w.driverDefer(func(d driver) {
+		d.SetCursor(name)
+	})
+}
+
+// Close the window. The window's event loop should exit when it receives
+// system.DestroyEvent.
+//
+// Currently, only macOS, Windows and X11 drivers implement this functionality,
+// all others are stubbed.
+func (w *Window) Close() {
+	w.driverDefer(func(d driver) {
+		d.Close()
+	})
+}
+
+// Maximize the window.
+// Note: only implemented on Windows.
+func (w *Window) Maximize() {
+	w.driverDefer(func(d driver) {
+		d.Maximize()
+	})
+}
+
+// Center the window.
+// Note: only implemented on Windows.
+func (w *Window) Center() {
+	w.driverDefer(func(d driver) {
+		d.Center()
+	})
+}
+
 // Run f in the same thread as the native window event loop, and wait for f to
 // return or the window to close. Run is guaranteed not to deadlock if it is
 // invoked during the handling of a ViewEvent, system.FrameEvent,
@@ -363,45 +336,69 @@ func (w *Window) WriteClipboard(s string) {
 // Note that most programs should not call Run; configuring a Window with
 // CustomRenderer is a notable exception.
 func (w *Window) Run(f func()) {
-	done := make(chan struct{})
-	w.driverDefer(func(d driver) {
-		defer close(done)
+	w.driverRun(func(_ driver) {
 		f()
 	})
+}
+
+// driverRun runs f on the driver event goroutine and returns when f has
+// completed. It can only be called during the processing of an event from
+// w.in.
+func (w *Window) driverRun(f func(d driver)) {
+	done := make(chan struct{})
+	wrapper := func(d driver) {
+		defer close(done)
+		f(d)
+	}
 	select {
-	case <-done:
+	case w.driverFuncs <- wrapper:
+		select {
+		case <-done:
+		case <-w.dead:
+		}
 	case <-w.dead:
 	}
 }
 
-// driverDefer is like Run but can be run from any context. It doesn't wait
+// driverDefer is like driverRun but can be run from any context. It doesn't wait
 // for f to return.
 func (w *Window) driverDefer(f func(d driver)) {
 	select {
-	case w.driverFuncs <- f:
+	case w.driverDefers <- f:
 		w.wakeup()
 	case <-w.dead:
 	}
 }
 
-func (w *Window) updateAnimation(d driver) {
+func (w *Window) updateAnimation() {
 	animate := false
+	if w.delayedDraw != nil {
+		w.delayedDraw.Stop()
+		w.delayedDraw = nil
+	}
 	if w.stage >= system.StageRunning && w.hasNextFrame {
 		if dt := time.Until(w.nextFrame); dt <= 0 {
 			animate = true
 		} else {
-			// Schedule redraw.
-			select {
-			case <-w.scheduledRedraws:
-			default:
-			}
-			w.scheduledRedraws <- w.nextFrame
+			w.delayedDraw = time.NewTimer(dt)
 		}
 	}
 	if animate != w.animating {
 		w.animating = animate
-		d.SetAnimating(animate)
+		if animate {
+			w.driverDefer(enableAnim)
+		} else {
+			w.driverDefer(disableAnim)
+		}
 	}
+}
+
+func enableAnim(d driver) {
+	d.SetAnimating(true)
+}
+
+func disableAnim(d driver) {
+	d.SetAnimating(false)
 }
 
 func (w *Window) wakeup() {
@@ -424,257 +421,76 @@ func (c *callbacks) SetDriver(d driver) {
 	if d != nil {
 		wakeup = d.Wakeup
 	}
-	c.w.wakeupFuncs <- wakeup
+	c.Event(driverEvent{wakeup})
 }
 
-func (c *callbacks) Event(e event.Event) bool {
+func (c *callbacks) Event(e event.Event) {
+	deferChan := c.w.driverDefers
 	if c.d == nil {
-		panic("event while no driver active")
+		deferChan = nil
 	}
-	c.waitEvents = append(c.waitEvents, e)
-	if c.busy {
-		return true
-	}
-	c.busy = true
-	defer func() {
-		c.busy = false
-	}()
-	var handled bool
-	for len(c.waitEvents) > 0 {
-		e := c.waitEvents[0]
-		copy(c.waitEvents, c.waitEvents[1:])
-		c.waitEvents = c.waitEvents[:len(c.waitEvents)-1]
-		handled = c.w.processEvent(c.d, e)
-	}
-	if _, iswakeup := e.(wakeupEvent); iswakeup {
-		if len(c.w.options) > 0 {
-			c.d.Configure(c.w.options)
-			c.w.options = nil
-		}
-		if c.w.actions != 0 {
-			c.d.Perform(c.w.actions)
-			c.w.actions = 0
-		}
-	}
-	c.w.updateState(c.d)
-	if c.w.closing {
-		c.w.closing = false
-		c.d.Close()
-	}
-	return handled
-}
-
-// SemanticRoot returns the ID of the semantic root.
-func (c *callbacks) SemanticRoot() router.SemanticID {
-	c.w.updateSemantics()
-	return c.w.semantic.root
-}
-
-// LookupSemantic looks up a semantic node from an ID. The zero ID denotes the root.
-func (c *callbacks) LookupSemantic(semID router.SemanticID) (router.SemanticNode, bool) {
-	c.w.updateSemantics()
-	n, found := c.w.semantic.ids[semID]
-	return n, found
-}
-
-func (c *callbacks) AppendSemanticDiffs(diffs []router.SemanticID) []router.SemanticID {
-	c.w.updateSemantics()
-	if tree := c.w.semantic.prevTree; len(tree) > 0 {
-		c.w.collectSemanticDiffs(&diffs, c.w.semantic.prevTree[0])
-	}
-	return diffs
-}
-
-func (c *callbacks) SemanticAt(pos f32.Point) (router.SemanticID, bool) {
-	c.w.updateSemantics()
-	return c.w.queue.q.SemanticAt(pos)
-}
-
-func (c *callbacks) EditorState() editorState {
-	return c.w.imeState
-}
-
-func (c *callbacks) SetComposingRegion(r key.Range) {
-	c.w.imeState.compose = r
-}
-
-func (c *callbacks) EditorInsert(text string) {
-	sel := c.w.imeState.Selection.Range
-	c.EditorReplace(sel, text)
-	start := sel.Start
-	if sel.End < start {
-		start = sel.End
-	}
-	sel.Start = start + utf8.RuneCountInString(text)
-	sel.End = sel.Start
-	c.SetEditorSelection(sel)
-}
-
-func (c *callbacks) EditorReplace(r key.Range, text string) {
-	c.w.imeState.Replace(r, text)
-	c.Event(key.EditEvent{Range: r, Text: text})
-	c.Event(key.SnippetEvent(c.w.imeState.Snippet.Range))
-}
-
-func (c *callbacks) SetEditorSelection(r key.Range) {
-	c.w.imeState.Selection.Range = r
-	c.Event(key.SelectionEvent(r))
-}
-
-func (c *callbacks) SetEditorSnippet(r key.Range) {
-	if sn := c.EditorState().Snippet.Range; sn == r {
-		// No need to expand.
-		return
-	}
-	c.Event(key.SnippetEvent(r))
-}
-
-func (w *Window) moveFocus(dir router.FocusDirection, d driver) {
-	if w.queue.q.MoveFocus(dir) {
-		w.queue.q.RevealFocus(w.viewport)
-	} else {
-		var v image.Point
-		switch dir {
-		case router.FocusRight:
-			v = image.Pt(+1, 0)
-		case router.FocusLeft:
-			v = image.Pt(-1, 0)
-		case router.FocusDown:
-			v = image.Pt(0, +1)
-		case router.FocusUp:
-			v = image.Pt(0, -1)
-		default:
+	for {
+		select {
+		case f := <-deferChan:
+			f(c.d)
+		case c.w.in <- e:
+			c.w.runFuncs(c.d)
+			return
+		case <-c.w.dead:
 			return
 		}
-		const scrollABit = unit.Dp(50)
-		dist := v.Mul(int(w.metric.Dp(scrollABit)))
-		w.queue.q.ScrollFocus(dist)
 	}
-	w.setNextFrame(time.Time{})
-	w.updateAnimation(d)
 }
 
-func (c *callbacks) ClickFocus() {
-	c.w.queue.q.ClickFocus()
-	c.w.setNextFrame(time.Time{})
-	c.w.updateAnimation(c.d)
-}
-
-func (e *editorState) Replace(r key.Range, text string) {
-	if r.Start > r.End {
-		r.Start, r.End = r.End, r.Start
+func (w *Window) runFuncs(d driver) {
+	// Don't run driver functions if there's no driver.
+	if d == nil {
+		<-w.ack
+		return
 	}
-	runes := []rune(text)
-	newEnd := r.Start + len(runes)
-	adjust := func(pos int) int {
-		switch {
-		case newEnd < pos && pos <= r.End:
-			return newEnd
-		case r.End < pos:
-			diff := newEnd - r.End
-			return pos + diff
-		}
-		return pos
+	var defers []func(d driver)
+	// Don't miss deferred functions when ack arrives immediately. There is one
+	// wakeup event per function, so one select is enough.
+	select {
+	case f := <-w.driverDefers:
+		defers = append(defers, f)
+	default:
 	}
-	e.Selection.Start = adjust(e.Selection.Start)
-	e.Selection.End = adjust(e.Selection.End)
-	if e.compose.Start != -1 {
-		e.compose.Start = adjust(e.compose.Start)
-		e.compose.End = adjust(e.compose.End)
-	}
-	s := e.Snippet
-	if r.End < s.Start || r.Start > s.End {
-		// Discard snippet if it doesn't overlap with replacement.
-		s = key.Snippet{
-			Range: key.Range{
-				Start: r.Start,
-				End:   r.Start,
-			},
-		}
-	}
-	var newSnippet []rune
-	snippet := []rune(s.Text)
-	// Append first part of existing snippet.
-	if end := r.Start - s.Start; end > 0 {
-		newSnippet = append(newSnippet, snippet[:end]...)
-	}
-	// Append replacement.
-	newSnippet = append(newSnippet, runes...)
-	// Append last part of existing snippet.
-	if start := r.End; start < s.End {
-		newSnippet = append(newSnippet, snippet[start-s.Start:]...)
-	}
-	// Adjust snippet range to include replacement.
-	if r.Start < s.Start {
-		s.Start = r.Start
-	}
-	s.End = s.Start + len(newSnippet)
-	s.Text = string(newSnippet)
-	e.Snippet = s
-}
-
-// UTF16Index converts the given index in runes into an index in utf16 characters.
-func (e *editorState) UTF16Index(runes int) int {
-	if runes == -1 {
-		return -1
-	}
-	if runes < e.Snippet.Start {
-		// Assume runes before sippet are one UTF-16 character each.
-		return runes
-	}
-	chars := e.Snippet.Start
-	runes -= e.Snippet.Start
-	for _, r := range e.Snippet.Text {
-		if runes == 0 {
-			break
-		}
-		runes--
-		chars++
-		if r1, _ := utf16.EncodeRune(r); r1 != unicode.ReplacementChar {
-			chars++
-		}
-	}
-	// Assume runes after snippets are one UTF-16 character each.
-	return chars + runes
-}
-
-// RunesIndex converts the given index in utf16 characters to an index in runes.
-func (e *editorState) RunesIndex(chars int) int {
-	if chars == -1 {
-		return -1
-	}
-	if chars < e.Snippet.Start {
-		// Assume runes before offset are one UTF-16 character each.
-		return chars
-	}
-	runes := e.Snippet.Start
-	chars -= e.Snippet.Start
-	for _, r := range e.Snippet.Text {
-		if chars == 0 {
-			break
-		}
-		chars--
-		runes++
-		if r1, _ := utf16.EncodeRune(r); r1 != unicode.ReplacementChar {
-			chars--
-		}
-	}
-	// Assume runes after snippets are one UTF-16 character each.
-	return runes + chars
-}
-
-func (w *Window) waitAck(d driver) {
+	// Wait for ack while running incoming runnables.
 	for {
 		select {
 		case f := <-w.driverFuncs:
 			f(d)
-		case w.out <- ackEvent:
-			// A dummy event went through, so we know the application has processed the previous event.
+		case f := <-w.driverDefers:
+			defers = append(defers, f)
+		case <-w.ack:
+			for _, f := range defers {
+				f(d)
+			}
 			return
-		case <-w.immediateRedraws:
-			// Invalidate was called during frame processing.
-			w.setNextFrame(time.Time{})
-			w.updateAnimation(d)
+		}
+	}
+}
+
+func (w *Window) waitAck() {
+	// Send a dummy event; when it gets through we
+	// know the application has processed the previous event.
+	w.out <- ackEvent
+}
+
+// Prematurely destroy the window and wait for the native window
+// destroy event.
+func (w *Window) destroy(err error) {
+	w.destroyGPU()
+	// Ack the current event.
+	w.ack <- struct{}{}
+	w.out <- system.DestroyEvent{Err: err}
+	close(w.dead)
+	close(w.out)
+	for e := range w.in {
+		w.ack <- struct{}{}
+		if _, ok := e.(system.DestroyEvent); ok {
+			return
 		}
 	}
 }
@@ -693,333 +509,142 @@ func (w *Window) destroyGPU() {
 }
 
 // waitFrame waits for the client to either call FrameEvent.Frame
-// or to continue event handling.
-func (w *Window) waitFrame(d driver) *op.Ops {
-	for {
-		select {
-		case f := <-w.driverFuncs:
-			f(d)
-		case frame := <-w.frames:
-			// The client called FrameEvent.Frame.
-			return frame
-		case w.out <- ackEvent:
-			// The client ignored FrameEvent and continued processing
-			// events.
-			return nil
-		case <-w.immediateRedraws:
-			// Invalidate was called during frame processing.
-			w.setNextFrame(time.Time{})
-		}
-	}
-}
-
-// updateSemantics refreshes the semantics tree, the id to node map and the ids of
-// updated nodes.
-func (w *Window) updateSemantics() {
-	if w.semantic.uptodate {
-		return
-	}
-	w.semantic.uptodate = true
-	w.semantic.prevTree, w.semantic.tree = w.semantic.tree, w.semantic.prevTree
-	w.semantic.tree = w.queue.q.AppendSemantics(w.semantic.tree[:0])
-	w.semantic.root = w.semantic.tree[0].ID
-	for _, n := range w.semantic.tree {
-		w.semantic.ids[n.ID] = n
-	}
-}
-
-// collectSemanticDiffs traverses the previous semantic tree, noting changed nodes.
-func (w *Window) collectSemanticDiffs(diffs *[]router.SemanticID, n router.SemanticNode) {
-	newNode, exists := w.semantic.ids[n.ID]
-	// Ignore deleted nodes, as their disappearance will be reported through an
-	// ancestor node.
-	if !exists {
-		return
-	}
-	diff := newNode.Desc != n.Desc || len(n.Children) != len(newNode.Children)
-	for i, ch := range n.Children {
-		if !diff {
-			newCh := newNode.Children[i]
-			diff = ch.ID != newCh.ID
-		}
-		w.collectSemanticDiffs(diffs, ch)
-	}
-	if diff {
-		*diffs = append(*diffs, n.ID)
-	}
-}
-
-func (w *Window) updateState(d driver) {
-	for {
-		select {
-		case f := <-w.driverFuncs:
-			f(d)
-		case <-w.redraws:
-			w.setNextFrame(time.Time{})
-			w.updateAnimation(d)
-		default:
-			return
-		}
-	}
-}
-
-func (w *Window) processEvent(d driver, e event.Event) bool {
+// or to continue event handling. It returns whether the client
+// called Frame or not.
+func (w *Window) waitFrame() (*op.Ops, bool) {
 	select {
-	case <-w.dead:
-		return false
-	default:
+	case frame := <-w.frames:
+		// The client called FrameEvent.Frame.
+		return frame, true
+	case w.out <- ackEvent:
+		// The client ignored FrameEvent and continued processing
+		// events.
+		return nil, false
 	}
-	switch e2 := e.(type) {
-	case system.StageEvent:
-		if e2.Stage < system.StageRunning {
-			if w.gpu != nil {
-				w.ctx.Lock()
-				w.gpu.Release()
-				w.gpu = nil
-				w.ctx.Unlock()
-			}
-		}
-		w.stage = e2.Stage
-		w.updateAnimation(d)
-		w.out <- e
-		w.waitAck(d)
-	case frameEvent:
-		if e2.Size == (image.Point{}) {
-			panic(errors.New("internal error: zero-sized Draw"))
-		}
-		if w.stage < system.StageRunning {
-			// No drawing if not visible.
-			break
-		}
-		w.metric = e2.Metric
-		var frameStart time.Time
-		if w.queue.q.Profiling() {
-			frameStart = time.Now()
-		}
-		w.hasNextFrame = false
-		e2.Frame = w.update
-		e2.Queue = &w.queue
-
-		// Prepare the decorations and update the frame insets.
-		wrapper := &w.decorations.Ops
-		wrapper.Reset()
-		viewport := image.Rectangle{
-			Min: image.Point{
-				X: e2.Metric.Dp(e2.Insets.Left),
-				Y: e2.Metric.Dp(e2.Insets.Top),
-			},
-			Max: image.Point{
-				X: e2.Size.X - e2.Metric.Dp(e2.Insets.Right),
-				Y: e2.Size.Y - e2.Metric.Dp(e2.Insets.Bottom),
-			},
-		}
-		// Scroll to focus if viewport is shrinking in any dimension.
-		if old, new := w.viewport.Size(), viewport.Size(); new.X < old.X || new.Y < old.Y {
-			w.queue.q.RevealFocus(viewport)
-		}
-		w.viewport = viewport
-		size := e2.Size // save the initial window size as the decorations will change it.
-		e2.FrameEvent.Size = w.decorate(d, e2.FrameEvent, wrapper)
-		w.out <- e2.FrameEvent
-		frame := w.waitFrame(d)
-		var signal chan<- struct{}
-		if frame != nil {
-			signal = w.frameAck
-			cl := clip.Rect{Max: e2.FrameEvent.Size}.Push(wrapper)
-			ops.AddCall(&wrapper.Internal, &frame.Internal, ops.PC{}, ops.PCFor(&frame.Internal))
-			cl.Pop()
-		}
-		err := w.validateAndProcess(d, size, e2.Sync, wrapper, signal)
-		if err != nil {
-			w.destroyGPU()
-			w.out <- system.DestroyEvent{Err: err}
-			close(w.dead)
-			close(w.out)
-			break
-		}
-		w.processFrame(d, frameStart)
-		w.updateCursor(d)
-	case system.DestroyEvent:
-		w.destroyGPU()
-		w.out <- e2
-		close(w.dead)
-		close(w.out)
-	case ViewEvent:
-		w.out <- e2
-		w.waitAck(d)
-	case wakeupEvent:
-	case ConfigEvent:
-		w.decorations.Config = e2.Config
-		if !w.fallbackDecorate() {
-			// Decorations are no longer applied.
-			w.decorations.Decorations = nil
-			w.decorations.size = image.Point{}
-		}
-		e2.Config.Size = e2.Config.Size.Sub(w.decorations.size)
-		w.out <- e2
-	case event.Event:
-		handled := w.queue.q.Queue(e2)
-		if handled {
-			w.setNextFrame(time.Time{})
-			w.updateAnimation(d)
-		} else if e, ok := e.(key.Event); ok && e.State == key.Press {
-			handled = true
-			isMobile := runtime.GOOS == "ios" || runtime.GOOS == "android"
-			switch {
-			case e.Name == key.NameTab && e.Modifiers == 0:
-				w.moveFocus(router.FocusForward, d)
-			case e.Name == key.NameTab && e.Modifiers == key.ModShift:
-				w.moveFocus(router.FocusBackward, d)
-			case e.Name == key.NameUpArrow && e.Modifiers == 0 && isMobile:
-				w.moveFocus(router.FocusUp, d)
-			case e.Name == key.NameDownArrow && e.Modifiers == 0 && isMobile:
-				w.moveFocus(router.FocusDown, d)
-			case e.Name == key.NameLeftArrow && e.Modifiers == 0 && isMobile:
-				w.moveFocus(router.FocusLeft, d)
-			case e.Name == key.NameRightArrow && e.Modifiers == 0 && isMobile:
-				w.moveFocus(router.FocusRight, d)
-			default:
-				handled = false
-			}
-		}
-		w.updateCursor(d)
-		return handled
-	}
-	return true
 }
 
 func (w *Window) run(options []Option) {
+	// Some OpenGL drivers don't like being made current on many different
+	// OS threads. Force the Go runtime to map the event loop goroutine to
+	// only one thread.
+	runtime.LockOSThread()
+
+	defer close(w.out)
+	defer close(w.dead)
 	if err := newWindow(&w.callbacks, options); err != nil {
 		w.out <- system.DestroyEvent{Err: err}
-		close(w.dead)
-		close(w.out)
 		return
 	}
 	var wakeup func()
-	var timer *time.Timer
 	for {
 		var (
 			wakeups <-chan struct{}
-			timeC   <-chan time.Time
+			timer   <-chan time.Time
 		)
 		if wakeup != nil {
 			wakeups = w.wakeups
-			if timer != nil {
-				timeC = timer.C
-			}
-		}
-		select {
-		case t := <-w.scheduledRedraws:
-			if timer != nil {
-				timer.Stop()
-			}
-			timer = time.NewTimer(time.Until(t))
-		case <-w.dead:
-			return
-		case <-timeC:
+			// Make sure any pending deferred driver functions are processed before calling
+			// into driverFunc again; only one driver function can be queued at a time.
 			select {
-			case w.redraws <- struct{}{}:
+			case <-wakeups:
 				wakeup()
 			default:
 			}
+		}
+		if w.delayedDraw != nil {
+			timer = w.delayedDraw.C
+		}
+		select {
+		case <-timer:
+			w.setNextFrame(time.Time{})
+			w.updateAnimation()
+		case <-w.invalidates:
+			w.setNextFrame(time.Time{})
+			w.updateAnimation()
 		case <-wakeups:
 			wakeup()
-		case wakeup = <-w.wakeupFuncs:
+		case e := <-w.in:
+			switch e2 := e.(type) {
+			case system.StageEvent:
+				if e2.Stage < system.StageRunning {
+					if w.gpu != nil {
+						w.ctx.Lock()
+						w.gpu.Release()
+						w.gpu = nil
+						w.ctx.Unlock()
+					}
+				}
+				w.stage = e2.Stage
+				w.updateAnimation()
+				w.out <- e
+				w.waitAck()
+			case frameEvent:
+				if e2.Size == (image.Point{}) {
+					panic(errors.New("internal error: zero-sized Draw"))
+				}
+				if w.stage < system.StageRunning {
+					// No drawing if not visible.
+					break
+				}
+				frameStart := time.Now()
+				w.hasNextFrame = false
+				e2.Frame = w.update
+				e2.Queue = &w.queue
+				w.out <- e2.FrameEvent
+				frame, gotFrame := w.waitFrame()
+				err := w.validateAndProcess(frameStart, e2.Size, e2.Sync, frame)
+				if gotFrame {
+					// We're done with frame, let the client continue.
+					w.frameAck <- struct{}{}
+				}
+				if err != nil {
+					w.destroyGPU()
+					w.destroy(err)
+					return
+				}
+				w.updateCursor()
+			case *system.CommandEvent:
+				w.out <- e
+				w.waitAck()
+			case driverEvent:
+				wakeup = e2.wakeup
+			case system.DestroyEvent:
+				w.destroyGPU()
+				w.out <- e2
+				w.ack <- struct{}{}
+				return
+			case ViewEvent:
+				w.out <- e2
+				w.waitAck()
+			case wakeupEvent:
+			case event.Event:
+				if w.queue.q.Queue(e2) {
+					w.setNextFrame(time.Time{})
+					w.updateAnimation()
+				}
+				w.updateCursor()
+				w.out <- e
+			}
+			w.ack <- struct{}{}
 		}
 	}
 }
 
-func (w *Window) updateCursor(d driver) {
+func (w *Window) updateCursor() {
 	if c := w.queue.q.Cursor(); c != w.cursor {
 		w.cursor = c
-		d.SetCursor(c)
+		w.SetCursorName(c)
 	}
 }
 
-func (w *Window) fallbackDecorate() bool {
-	cnf := w.decorations.Config
-	return !cnf.Decorated && cnf.Mode != Fullscreen && !w.nocontext
-}
-
-// decorate the window if enabled and returns the corresponding Insets.
-func (w *Window) decorate(d driver, e system.FrameEvent, o *op.Ops) image.Point {
-	if !w.fallbackDecorate() {
-		return e.Size
-	}
-	theme := w.decorations.Theme
-	if theme == nil {
-		theme = material.NewTheme(gofont.Collection())
-		w.decorations.Theme = theme
-	}
-	deco := w.decorations.Decorations
-	if deco == nil {
-		deco = new(widget.Decorations)
-		w.decorations.Decorations = deco
-	}
-	allActions := system.ActionMinimize | system.ActionMaximize | system.ActionUnmaximize |
-		system.ActionClose | system.ActionMove |
-		system.ActionResizeNorth | system.ActionResizeSouth |
-		system.ActionResizeWest | system.ActionResizeEast |
-		system.ActionResizeNorthWest | system.ActionResizeSouthWest |
-		system.ActionResizeNorthEast | system.ActionResizeSouthEast
-	style := material.Decorations(theme, deco, allActions, w.decorations.Config.Title)
-	// Update the decorations based on the current window mode.
-	var actions system.Action
-	switch m := w.decorations.Config.Mode; m {
-	case Windowed:
-		actions |= system.ActionUnmaximize
-	case Minimized:
-		actions |= system.ActionMinimize
-	case Maximized:
-		actions |= system.ActionMaximize
-	case Fullscreen:
-		actions |= system.ActionFullscreen
-	default:
-		panic(fmt.Errorf("unknown WindowMode %v", m))
-	}
-	deco.Perform(actions)
-	gtx := layout.Context{
-		Ops:         o,
-		Now:         e.Now,
-		Queue:       e.Queue,
-		Metric:      e.Metric,
-		Constraints: layout.Exact(e.Size),
-	}
-	dims := style.Layout(gtx)
-	// Update the window based on the actions on the decorations.
-	w.Perform(deco.Actions())
-	// Offset to place the frame content below the decorations.
-	size := image.Point{Y: dims.Size.Y}
-	op.Offset(image.Pt(0, size.Y)).Add(o)
-	appSize := e.Size.Sub(size)
-	if w.decorations.size != size {
-		w.decorations.size = size
-		cnf := w.decorations.Config
-		cnf.Size = appSize
-		w.out <- ConfigEvent{Config: cnf}
-	}
-	return appSize
-}
-
-// Perform the actions on the window.
-func (w *Window) Perform(actions system.Action) {
-	walkActions(actions, func(action system.Action) {
-		switch action {
-		case system.ActionMinimize:
-			w.options = append(w.options, Minimized.Option())
-		case system.ActionMaximize:
-			w.options = append(w.options, Maximized.Option())
-		case system.ActionUnmaximize:
-			w.options = append(w.options, Windowed.Option())
-		case system.ActionClose:
-			w.closing = true
-		default:
-			return
-		}
-		actions &^= action
+// Raise requests that the platform bring this window to the top of all open windows.
+// Some platforms do not allow this except under certain circumstances, such as when
+// a window from the same application already has focus. If the platform does not
+// support it, this method will do nothing.
+func (w *Window) Raise() {
+	w.driverDefer(func(d driver) {
+		d.Raise()
 	})
-	w.actions = w.actions | actions
-	w.wakeup()
 }
 
 func (q *queue) Events(k event.Tag) []event.Event {
@@ -1033,51 +658,51 @@ func Title(t string) Option {
 	}
 }
 
-// Size sets the size of the window. The mode will be changed to Windowed.
-func Size(w, h unit.Dp) Option {
-	if w <= 0 {
+// Size sets the size of the window. The option is ignored
+// in Fullscreen mode.
+func Size(w, h unit.Value) Option {
+	if w.V <= 0 {
 		panic("width must be larger than or equal to 0")
 	}
-	if h <= 0 {
+	if h.V <= 0 {
 		panic("height must be larger than or equal to 0")
 	}
 	return func(m unit.Metric, cnf *Config) {
-		cnf.Mode = Windowed
 		cnf.Size = image.Point{
-			X: m.Dp(w),
-			Y: m.Dp(h),
+			X: m.Px(w),
+			Y: m.Px(h),
 		}
 	}
 }
 
 // MaxSize sets the maximum size of the window.
-func MaxSize(w, h unit.Dp) Option {
-	if w <= 0 {
+func MaxSize(w, h unit.Value) Option {
+	if w.V <= 0 {
 		panic("width must be larger than or equal to 0")
 	}
-	if h <= 0 {
+	if h.V <= 0 {
 		panic("height must be larger than or equal to 0")
 	}
 	return func(m unit.Metric, cnf *Config) {
 		cnf.MaxSize = image.Point{
-			X: m.Dp(w),
-			Y: m.Dp(h),
+			X: m.Px(w),
+			Y: m.Px(h),
 		}
 	}
 }
 
 // MinSize sets the minimum size of the window.
-func MinSize(w, h unit.Dp) Option {
-	if w <= 0 {
+func MinSize(w, h unit.Value) Option {
+	if w.V <= 0 {
 		panic("width must be larger than or equal to 0")
 	}
-	if h <= 0 {
+	if h.V <= 0 {
 		panic("height must be larger than or equal to 0")
 	}
 	return func(m unit.Metric, cnf *Config) {
 		cnf.MinSize = image.Point{
-			X: m.Dp(w),
-			Y: m.Dp(h),
+			X: m.Px(w),
+			Y: m.Px(h),
 		}
 	}
 }
@@ -1098,21 +723,10 @@ func NavigationColor(color color.NRGBA) Option {
 
 // CustomRenderer controls whether the window contents is
 // rendered by the client. If true, no GPU context is created.
-//
-// Caller must assume responsibility for rendering which includes
-// initializing the render backend, swapping the framebuffer and
-// handling frame pacing.
 func CustomRenderer(custom bool) Option {
 	return func(_ unit.Metric, cnf *Config) {
 		cnf.CustomRenderer = custom
 	}
 }
 
-// Decorated controls whether Gio and/or the platform are responsible
-// for drawing window decorations. Providing false indicates that
-// the application will either be undecorated or will draw its own decorations.
-func Decorated(enabled bool) Option {
-	return func(_ unit.Metric, cnf *Config) {
-		cnf.Decorated = enabled
-	}
-}
+func (driverEvent) ImplementsEvent() {}

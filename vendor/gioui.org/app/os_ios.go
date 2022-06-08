@@ -87,8 +87,8 @@ import (
 )
 
 type ViewEvent struct {
-	// ViewController is a CFTypeRef for the UIViewController backing a Window.
-	ViewController uintptr
+	// View is a CFTypeRef for the UIView backing a Window.
+	View uintptr
 }
 
 type window struct {
@@ -97,8 +97,7 @@ type window struct {
 	displayLink *displayLink
 
 	visible bool
-	cursor  pointer.Cursor
-	config  Config
+	cursor  pointer.CursorName
 
 	pointerMap []C.CFTypeRef
 }
@@ -113,7 +112,7 @@ func init() {
 }
 
 //export onCreate
-func onCreate(view, controller C.CFTypeRef) {
+func onCreate(view C.CFTypeRef) {
 	w := &window{
 		view: view,
 	}
@@ -128,9 +127,8 @@ func onCreate(view, controller C.CFTypeRef) {
 	w.w = wopts.window
 	w.w.SetDriver(w)
 	views[view] = w
-	w.Configure(wopts.options)
 	w.w.Event(system.StageEvent{Stage: system.StagePaused})
-	w.w.Event(ViewEvent{ViewController: uintptr(controller)})
+	w.w.Event(ViewEvent{View: uintptr(view)})
 }
 
 //export gio_onDraw
@@ -150,11 +148,6 @@ func (w *window) draw(sync bool) {
 		w.w.Event(system.StageEvent{Stage: system.StageRunning})
 	}
 	const inchPrDp = 1.0 / 163
-	m := unit.Metric{
-		PxPerDp: float32(params.dpi) * inchPrDp,
-		PxPerSp: float32(params.sdpi) * inchPrDp,
-	}
-	dppp := unit.Dp(1. / m.PxPerDp)
 	w.w.Event(frameEvent{
 		FrameEvent: system.FrameEvent{
 			Now: time.Now(),
@@ -163,12 +156,15 @@ func (w *window) draw(sync bool) {
 				Y: int(params.height + .5),
 			},
 			Insets: system.Insets{
-				Top:    unit.Dp(params.top) * dppp,
-				Bottom: unit.Dp(params.bottom) * dppp,
-				Left:   unit.Dp(params.left) * dppp,
-				Right:  unit.Dp(params.right) * dppp,
+				Top:    unit.Px(float32(params.top)),
+				Right:  unit.Px(float32(params.right)),
+				Bottom: unit.Px(float32(params.bottom)),
+				Left:   unit.Px(float32(params.left)),
 			},
-			Metric: m,
+			Metric: unit.Metric{
+				PxPerDp: float32(params.dpi) * inchPrDp,
+				PxPerSp: float32(params.sdpi) * inchPrDp,
+			},
 		},
 		Sync: sync,
 	})
@@ -229,9 +225,11 @@ func onDeleteBackward(view C.CFTypeRef) {
 }
 
 //export onText
-func onText(view, str C.CFTypeRef) {
+func onText(view C.CFTypeRef, str *C.char) {
 	w := views[view]
-	w.w.EditorInsert(nsstringToString(str))
+	w.w.Event(key.EditEvent{
+		Text: C.GoString(str),
+	})
 }
 
 //export onTouch
@@ -262,9 +260,7 @@ func onTouch(last C.int, view, touchRef C.CFTypeRef, phase C.NSInteger, x, y C.C
 }
 
 func (w *window) ReadClipboard() {
-	cstr := C.readClipboard()
-	defer C.CFRelease(cstr)
-	content := nsstringToString(cstr)
+	content := nsstringToString(C.readClipboard())
 	w.w.Event(clipboard.Event{Text: content})
 }
 
@@ -277,18 +273,9 @@ func (w *window) WriteClipboard(s string) {
 	C.writeClipboard(chars, C.NSUInteger(len(u16)))
 }
 
-func (w *window) Configure([]Option) {
-	prev := w.config
-	// Decorations are never disabled.
-	w.config.Decorated = true
-	if w.config != prev {
-		w.w.Event(ConfigEvent{Config: w.config})
-	}
-}
+func (w *window) Configure([]Option) {}
 
-func (w *window) EditorStateChanged(old, new editorState) {}
-
-func (w *window) Perform(system.Action) {}
+func (w *window) Raise() {}
 
 func (w *window) SetAnimating(anim bool) {
 	v := w.view
@@ -302,8 +289,8 @@ func (w *window) SetAnimating(anim bool) {
 	}
 }
 
-func (w *window) SetCursor(cursor pointer.Cursor) {
-	w.cursor = windowSetCursor(w.cursor, cursor)
+func (w *window) SetCursor(name pointer.CursorName) {
+	w.cursor = windowSetCursor(w.cursor, name)
 }
 
 func (w *window) onKeyCommand(name string) {
@@ -348,6 +335,12 @@ func (w *window) SetInputHint(_ key.InputHint) {}
 
 // Close the window. Not implemented for iOS.
 func (w *window) Close() {}
+
+// Maximize the window. Not implemented for iOS.
+func (w *window) Maximize() {}
+
+// Center the window. Not implemented for iOS.
+func (w *window) Center() {}
 
 func newWindow(win *callbacks, options []Option) error {
 	mainWindow.in <- windowAndConfig{win, options}

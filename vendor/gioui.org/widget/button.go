@@ -6,12 +6,10 @@ import (
 	"image"
 	"time"
 
+	"gioui.org/f32"
 	"gioui.org/gesture"
 	"gioui.org/io/key"
-	"gioui.org/io/pointer"
-	"gioui.org/io/semantic"
 	"gioui.org/layout"
-	"gioui.org/op"
 	"gioui.org/op/clip"
 )
 
@@ -24,9 +22,6 @@ type Clickable struct {
 	// clicks bounded.
 	prevClicks int
 	history    []Press
-
-	keyTag  struct{}
-	focused bool
 }
 
 // Click represents a click.
@@ -38,7 +33,7 @@ type Click struct {
 // Press represents a past pointer press.
 type Press struct {
 	// Position of the press.
-	Position image.Point
+	Position f32.Point
 	// Start is when the press began.
 	Start time.Time
 	// End is when the press was ended by a release or cancel.
@@ -70,19 +65,14 @@ func (b *Clickable) Clicked() bool {
 	return true
 }
 
-// Hovered reports whether a pointer is over the element.
+// Hovered returns whether pointer is over the element.
 func (b *Clickable) Hovered() bool {
 	return b.click.Hovered()
 }
 
-// Pressed reports whether a pointer is pressing the element.
+// Pressed returns whether pointer is pressing the element.
 func (b *Clickable) Pressed() bool {
 	return b.click.Pressed()
-}
-
-// Focused reports whether b has focus.
-func (b *Clickable) Focused() bool {
-	return b.focused
 }
 
 // Clicks returns and clear the clicks since the last call to Clicks.
@@ -100,21 +90,10 @@ func (b *Clickable) History() []Press {
 }
 
 // Layout and update the button state
-func (b *Clickable) Layout(gtx layout.Context, w layout.Widget) layout.Dimensions {
+func (b *Clickable) Layout(gtx layout.Context) layout.Dimensions {
 	b.update(gtx)
-	m := op.Record(gtx.Ops)
-	dims := w(gtx)
-	c := m.Stop()
-	defer clip.Rect(image.Rectangle{Max: dims.Size}).Push(gtx.Ops).Pop()
-	disabled := gtx.Queue == nil
-	semantic.DisabledOp(disabled).Add(gtx.Ops)
+	defer clip.Rect(image.Rectangle{Max: gtx.Constraints.Min}).Push(gtx.Ops).Pop()
 	b.click.Add(gtx.Ops)
-	if !disabled {
-		key.InputOp{Tag: &b.keyTag, Keys: "⏎|Space"}.Add(gtx.Ops)
-	} else {
-		b.focused = false
-	}
-	c.Add(gtx.Ops)
 	for len(b.history) > 0 {
 		c := b.history[0]
 		if c.End.IsZero() || gtx.Now.Sub(c.End) < 1*time.Second {
@@ -123,7 +102,7 @@ func (b *Clickable) Layout(gtx layout.Context, w layout.Widget) layout.Dimension
 		n := copy(b.history, b.history[1:])
 		b.history = b.history[:n]
 	}
-	return dims
+	return layout.Dimensions{Size: gtx.Constraints.Min}
 }
 
 // update the button state by processing events.
@@ -151,29 +130,9 @@ func (b *Clickable) update(gtx layout.Context) {
 				}
 			}
 		case gesture.TypePress:
-			if e.Source == pointer.Mouse {
-				key.FocusOp{Tag: &b.keyTag}.Add(gtx.Ops)
-			}
 			b.history = append(b.history, Press{
 				Position: e.Position,
 				Start:    gtx.Now,
-			})
-		}
-	}
-	for _, e := range gtx.Events(&b.keyTag) {
-		switch e := e.(type) {
-		case key.FocusEvent:
-			b.focused = e.Focus
-		case key.Event:
-			if !b.focused || e.State != key.Release {
-				break
-			}
-			if e.Name != key.NameReturn && e.Name != key.NameSpace {
-				break
-			}
-			b.clicks = append(b.clicks, Click{
-				Modifiers: e.Modifiers,
-				NumClicks: 1,
 			})
 		}
 	}

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Unlicense OR MIT
 
+// package app implements platform specific windows
+// and GPU contexts.
 package app
 
 import (
@@ -14,6 +16,11 @@ import (
 	"gioui.org/io/system"
 	"gioui.org/unit"
 )
+
+type size struct {
+	Width  unit.Value
+	Height unit.Value
+}
 
 // errOutOfDate is reported when the GPU surface dimensions or properties no
 // longer match the window.
@@ -41,8 +48,6 @@ type Config struct {
 	// CustomRenderer is true when the window content is rendered by the
 	// client.
 	CustomRenderer bool
-	// Decorated reports whether window decorations are provided automatically.
-	Decorated bool
 }
 
 // ConfigEvent is sent whenever the configuration of a Window changes.
@@ -59,8 +64,8 @@ func (c *Config) apply(m unit.Metric, options []Option) {
 type wakeupEvent struct{}
 
 // WindowMode is the window mode (WindowMode.Option sets it).
-// Note that mode can be changed programatically as well as by the user
-// clicking on the minimize/maximize buttons on the window's title bar.
+//
+// Supported platforms are macOS, X11, Windows, Android and JS.
 type WindowMode uint8
 
 const (
@@ -68,32 +73,12 @@ const (
 	Windowed WindowMode = iota
 	// Fullscreen is the full screen window mode.
 	Fullscreen
-	// Minimized is for systems where the window can be minimized to an icon.
-	Minimized
-	// Maximized is for systems where the window can be made to fill the available monitor area.
-	Maximized
 )
 
-// Option changes the mode of a Window.
 func (m WindowMode) Option() Option {
 	return func(_ unit.Metric, cnf *Config) {
 		cnf.Mode = m
 	}
-}
-
-// String returns the mode name.
-func (m WindowMode) String() string {
-	switch m {
-	case Windowed:
-		return "windowed"
-	case Fullscreen:
-		return "fullscreen"
-	case Minimized:
-		return "minimized"
-	case Maximized:
-		return "maximized"
-	}
-	return ""
 }
 
 // Orientation is the orientation of the app (Orientation.Option sets it).
@@ -114,18 +99,6 @@ func (o Orientation) Option() Option {
 	return func(_ unit.Metric, cnf *Config) {
 		cnf.Orientation = o
 	}
-}
-
-func (o Orientation) String() string {
-	switch o {
-	case AnyOrientation:
-		return "any"
-	case LandscapeOrientation:
-		return "landscape"
-	case PortraitOrientation:
-		return "portrait"
-	}
-	return ""
 }
 
 type frameEvent struct {
@@ -150,26 +123,37 @@ type driver interface {
 	// SetAnimating sets the animation flag. When the window is animating,
 	// FrameEvents are delivered as fast as the display can handle them.
 	SetAnimating(anim bool)
+
 	// ShowTextInput updates the virtual keyboard state.
 	ShowTextInput(show bool)
+
 	SetInputHint(mode key.InputHint)
+
 	NewContext() (context, error)
+
 	// ReadClipboard requests the clipboard content.
 	ReadClipboard()
 	// WriteClipboard requests a clipboard write.
 	WriteClipboard(s string)
+
 	// Configure the window.
 	Configure([]Option)
+
 	// SetCursor updates the current cursor to name.
-	SetCursor(cursor pointer.Cursor)
+	SetCursor(name pointer.CursorName)
+
+	// Raise the window at the top.
+	Raise()
+
 	// Close the window.
 	Close()
 	// Wakeup wakes up the event loop and sends a WakeupEvent.
 	Wakeup()
-	// Perform actions on the window.
-	Perform(system.Action)
-	// EditorStateChanged notifies the driver that the editor state changed.
-	EditorStateChanged(old, new editorState)
+
+	// Maximize will make the window as large as possible, but keep the frame decorations.
+	Maximize()
+	// Center will place the window at monitor center.
+	Center()
 }
 
 type windowRendezvous struct {
@@ -211,12 +195,3 @@ func newWindowRendezvous() *windowRendezvous {
 
 func (wakeupEvent) ImplementsEvent() {}
 func (ConfigEvent) ImplementsEvent() {}
-
-func walkActions(actions system.Action, do func(system.Action)) {
-	for a := system.Action(1); actions != 0; a <<= 1 {
-		if actions&a != 0 {
-			actions &^= a
-			do(a)
-		}
-	}
-}

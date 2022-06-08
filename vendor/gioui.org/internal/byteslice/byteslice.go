@@ -11,9 +11,14 @@ import (
 
 // Struct returns a byte slice view of a struct.
 func Struct(s interface{}) []byte {
-	v := reflect.ValueOf(s)
-	sz := int(v.Elem().Type().Size())
-	return unsafe.Slice((*byte)(unsafe.Pointer(v.Pointer())), sz)
+	v := reflect.ValueOf(s).Elem()
+	sz := int(v.Type().Size())
+	var res []byte
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	h.Data = uintptr(unsafe.Pointer(v.UnsafeAddr()))
+	h.Cap = sz
+	h.Len = sz
+	return res
 }
 
 // Uint32 returns a byte slice view of a uint32 slice.
@@ -23,7 +28,7 @@ func Uint32(s []uint32) []byte {
 		return nil
 	}
 	blen := n * int(unsafe.Sizeof(s[0]))
-	return unsafe.Slice((*byte)(unsafe.Pointer(&s[0])), blen)
+	return (*[1 << 30]byte)(unsafe.Pointer(&s[0]))[:blen:blen]
 }
 
 // Slice returns a byte slice view of a slice.
@@ -31,6 +36,10 @@ func Slice(s interface{}) []byte {
 	v := reflect.ValueOf(s)
 	first := v.Index(0)
 	sz := int(first.Type().Size())
-	res := unsafe.Slice((*byte)(unsafe.Pointer(v.Pointer())), sz*v.Cap())
-	return res[:sz*v.Len()]
+	var res []byte
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	h.Data = first.UnsafeAddr()
+	h.Cap = v.Cap() * sz
+	h.Len = v.Len() * sz
+	return res
 }
