@@ -1,10 +1,14 @@
 # showyourself
 
-Image viewer for the terminal that uses [content aware image resizing](https://github.com/esimov/caire).
+16 color image viewer for the terminal that uses [content aware image resizing](https://github.com/esimov/caire).
 
-* Currently, it can only show one image, a grumpy cat, in [16 colors](https://github.com/xyproto/palgen), using `*` or `█` as the "pixel".
-* I'm planning to make it more flexible in the future.
-* See `TODO.md` for plans.
+## Arch
+
+![arch](img/archbtw.png)
+
+## Arch in a VT100 terminal emulator in 16 colors
+
+![arch 16 colors](archbtw16colors.png)
 
 ## A grumpy cat
 
