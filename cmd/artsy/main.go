@@ -9,7 +9,7 @@ import (
 	"github.com/xyproto/vt100"
 )
 
-const versionString = "artsy 1.0.1"
+const versionString = "artsy 1.0.2"
 
 func main() {
 	if len(os.Args) <= 1 {
