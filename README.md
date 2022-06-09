@@ -19,6 +19,8 @@ I wanted to develop an image viewer that could be usable from within [`o`](https
 | <img src=img/archbtw.png width=512>   |              <img src=img/archbtw16colors.png width=512> |
 | <img src=img/rt.png width=512>        |                   <img src=img/rt16colors.png width=512> |
 
+The images are changed, but the essence is kept.
+
 ## Installation
 
 The `viewpng` utility can be installed with Go 1.17 or later:
