@@ -1,4 +1,4 @@
-# Artsy :framed_picture:
+# Artsy
 
 16 color image viewer for the terminal that uses content-aware image resizing.
 
