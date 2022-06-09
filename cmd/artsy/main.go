@@ -9,7 +9,7 @@ import (
 	"github.com/xyproto/vt100"
 )
 
-const versionString = "viewpng 1.0.0"
+const versionString = "artsy 1.0.0"
 
 func main() {
 	if len(os.Args) <= 1 {

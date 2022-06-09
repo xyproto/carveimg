@@ -1,4 +1,4 @@
-# showyourself :framed_picture: 
+# Artsy :framed_picture:
 
 16 color image viewer for the terminal that uses [content aware image resizing](https://github.com/esimov/caire).
 
@@ -23,9 +23,9 @@ The images are changed, but the essence is kept.
 
 ## Installation
 
-The `viewpng` utility can be installed with Go 1.17 or later:
+The `artsy` utility can be installed with Go 1.17 or later:
 
-    go install github.com/xyproto/showyourself/cmd/viewpng@latest
+    go install github.com/xyproto/artsy/cmd/artsy@latest
 
 ## General info
 
