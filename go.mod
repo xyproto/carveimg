@@ -19,6 +19,6 @@ require (
 	golang.org/x/exp v0.0.0-20220317015231-48e79f11773a // indirect
 	golang.org/x/exp/shiny v0.0.0-20220317015231-48e79f11773a // indirect
 	golang.org/x/image v0.0.0-20211028202545-6944b10bf410 // indirect
-	golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a // indirect
+	golang.org/x/sys v0.0.0-20220608164250-635b8c9b7f68 // indirect
 	golang.org/x/text v0.3.6 // indirect
 )
