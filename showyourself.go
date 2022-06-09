@@ -1,4 +1,4 @@
-package showyourself
+package artsy
 
 import (
 	"errors"

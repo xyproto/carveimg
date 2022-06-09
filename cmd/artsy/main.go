@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/esimov/caire"
-	"github.com/xyproto/showyourself"
+	"github.com/xyproto/artsy"
 	"github.com/xyproto/vt100"
 )
 
@@ -49,7 +49,7 @@ func main() {
 	}
 
 	// Load the given filename
-	nImage, err := showyourself.LoadImage(filename)
+	nImage, err := artsy.LoadImage(filename)
 	if err != nil {
 		vt100.Close()
 		fmt.Fprintf(os.Stderr, "Could not load %s: %s\n", filename, err)
@@ -66,7 +66,7 @@ func main() {
 	}
 
 	// Draw the image to the canvas, using only the basic 16 colors
-	if err := showyourself.Draw(c, resizedImage); err != nil {
+	if err := artsy.Draw(c, resizedImage); err != nil {
 		vt100.Close()
 		fmt.Fprintln(os.Stderr, "Could not draw image: %s\n", err)
 		os.Exit(1)
