@@ -16,9 +16,9 @@ I wanted to develop an image viewer that could be usable from within [`o`](https
 
 | Original PNG image                    | In a VT100 compatible terminal emulator, using 16 colors |
 |---------------------------------------|----------------------------------------------------------|
-| <img src=img/grumpycat.png width=512> |            <img src=img/grumpycat16colors.png width=512> |
-| <img src=img/archbtw.png width=512>   |              <img src=img/archbtw16colors.png width=512> |
 | <img src=img/rt.png width=512>        |                   <img src=img/rt16colors.png width=512> |
+| <img src=img/archbtw.png width=512>   |              <img src=img/archbtw16colors.png width=512> |
+| <img src=img/grumpycat.png width=512> |            <img src=img/grumpycat16colors.png width=512> |
 
 The images are changed, but the essence is kept.
 
