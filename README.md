@@ -1,6 +1,6 @@
 # Artsy :framed_picture:
 
-16 color image viewer for the terminal that uses [content aware image resizing](https://github.com/esimov/caire).
+16 color image viewer for the terminal that uses content-aware image resizing.
 
 ## Why
 
@@ -9,7 +9,8 @@ I wanted to develop an image viewer that could be usable from within [`o`](https
 ## Features and limitations
 
 * The content-aware image resizing changes the image, but keeps the most interesting content.
-* The palette reduction is done by [`palgen`](https://github.com/xyproto/palgen).
+* The image resizing is done with [`caire`](https://github.com/esimov/caire).
+* The palette reduction is done with [`palgen`](https://github.com/xyproto/palgen).
 
 ## Comparison
 
