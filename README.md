@@ -1,4 +1,4 @@
-# :paintbrush: Artsy
+# Artsy :paintbrush:
 
 16 color image viewer for the terminal that uses content-aware image resizing.
 
