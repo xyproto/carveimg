@@ -21,7 +21,7 @@ The `preview` utility can be installed with Go 1.17 or later:
 
 ## Performance
 
-* Note that the image reszing is very slow for larger images (wallpaper size and up).
+* Note that the image reszing may be very slow for larger images.
 
 ## General info
 
