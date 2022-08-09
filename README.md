@@ -1,14 +1,8 @@
-# Preview :painting:
+# Preview
 
-This is a quick and handy image viewer for the terminal.
+Approximate image viewer for the terminal that uses content-aware image resizing.
 
-## Features and limitations
-
-* Uses only 16 colors.
-* Gives a good preview of an image. The image is stretched, but most of the contents are there.
-* Uses content-aware image resizing.
-
-## Technical info
+## Go packages in use
 
 * The image resizing is done by the [`caire`](https://github.com/esimov/caire) package.
 * The palette reduction is done by the [`palgen`](https://github.com/xyproto/palgen) package.
