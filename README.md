@@ -13,13 +13,15 @@ Approximate image viewer for the terminal that uses content-aware image resizing
 |---------------------------------------|----------------------------------------------------------|
 | <img src=img/grumpycat.png width=512> |            <img src=img/grumpycat16colors.png width=512> |
 
-The images are changed, but the essence is kept.
-
 ## Installation
 
 The `preview` utility can be installed with Go 1.17 or later:
 
     go install github.com/xyproto/preview/cmd/preview@latest
+
+## Performance
+
+* Note that the image reszing is very slow for larger images (wallpaper size and up).
 
 ## General info
 
