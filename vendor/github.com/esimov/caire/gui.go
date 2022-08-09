@@ -5,6 +5,8 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"math/rand"
+	"time"
 
 	"gioui.org/app"
 	"gioui.org/f32"
@@ -21,17 +23,23 @@ import (
 	"github.com/esimov/caire/utils"
 )
 
-type (
-	C = layout.Context
-	D = layout.Dimensions
-)
-
 const (
-	maxScreenX = 1366
-	maxScreenY = 768
+	// The starting colors for the linear gradient, used when the image is resized both horzontally and vertically.
+	// In this case the preview mode is deactivated and a dynamic gradient overlay is shown.
+	redStart   = 137
+	greenStart = 47
+	blueStart  = 54
+
+	// The ending colors for the linear gradient. The starting colors and ending colors are lerped.
+	redEnd   = 255
+	greenEnd = 112
+	blueEnd  = 105
 )
 
 var (
+	maxScreenX float32 = 1024
+	maxScreenY float32 = 768
+
 	defaultBkgColor  = color.Transparent
 	defaultFillColor = color.Black
 )
@@ -46,15 +54,22 @@ type Gui struct {
 	cfg struct {
 		x      interval
 		y      interval
+		chrot  bool
+		angle  float32
 		window struct {
-			w     float64
-			h     float64
+			w     float32
+			h     float32
 			title string
 		}
 		color struct {
+			randR uint8
+			randG uint8
+			randB uint8
+
 			background color.Color
 			fill       color.Color
 		}
+		timeStamp time.Time
 	}
 	proc struct {
 		isDone bool
@@ -64,20 +79,12 @@ type Gui struct {
 		wrk <-chan worker
 		err chan<- error
 	}
-	cp  *Processor
-	ctx layout.Context
+	cp *Processor
 }
 
 // NewGUI initializes the Gio interface.
 func NewGUI(w, h int) *Gui {
-	gui := &Gui{
-		ctx: layout.Context{
-			Ops: new(op.Ops),
-			Constraints: layout.Constraints{
-				Max: image.Pt(w, h),
-			},
-		},
-	}
+	gui := &Gui{}
 	gui.initWindow(w, h)
 
 	return gui
@@ -85,26 +92,34 @@ func NewGUI(w, h int) *Gui {
 
 // initWindow creates and initializes the GUI window.
 func (g *Gui) initWindow(w, h int) {
-	g.cfg.window.w, g.cfg.window.h = float64(w), float64(h)
+	rand.NewSource(time.Now().UnixNano())
+
+	g.cfg.angle = 45
+	g.cfg.color.randR = uint8(random(1, 2))
+	g.cfg.color.randG = uint8(random(1, 2))
+	g.cfg.color.randB = uint8(random(1, 2))
+
+	g.cfg.window.w, g.cfg.window.h = float32(w), float32(h)
 	g.cfg.x = interval{min: 0, max: float64(w)}
 	g.cfg.y = interval{min: 0, max: float64(h)}
 
 	g.cfg.color.background = defaultBkgColor
 	g.cfg.color.fill = defaultFillColor
 
-	g.cfg.window.w, g.cfg.window.h = g.getWindowSize()
-	g.cfg.window.title = "Image resize in progress..."
+	if !resizeXY {
+		g.cfg.window.w, g.cfg.window.h = g.getWindowSize()
+	}
+	g.cfg.window.title = "Preview"
 }
 
 // getWindowSize returns the resized image dimmension.
-func (g *Gui) getWindowSize() (float64, float64) {
+func (g *Gui) getWindowSize() (float32, float32) {
 	w, h := g.cfg.window.w, g.cfg.window.h
-
 	// Maintain the image aspect ratio in case the image width and height is greater than the predefined window.
 	r := getRatio(w, h)
 	if w > maxScreenX && h > maxScreenY {
-		w = float64(w) * r
-		h = float64(h) * r
+		w = w * r
+		h = h * r
 	}
 	return w, h
 }
@@ -113,10 +128,18 @@ func (g *Gui) getWindowSize() (float64, float64) {
 // This updates the window with the resized image received from a channel
 // and terminates when the image resizing operation completes.
 func (g *Gui) Run() error {
+	var (
+		rc uint8 = redStart
+		gc uint8 = greenStart
+		bc uint8 = blueStart
+
+		descRed, descGreen, descBlue bool
+	)
 	w := app.NewWindow(app.Title(g.cfg.window.title), app.Size(
-		unit.Px(float32(g.cfg.window.w)),
-		unit.Px(float32(g.cfg.window.h)),
+		unit.Dp(g.cfg.window.w),
+		unit.Dp(g.cfg.window.h),
 	))
+	g.cfg.timeStamp = time.Now()
 
 	abortFn := func() {
 		var dx, dy int
@@ -131,7 +154,7 @@ func (g *Gui) Run() error {
 
 				errorMsg := fmt.Sprintf("%s %s %s",
 					utils.DecorateText("⚡ CAIRE", utils.StatusMessage),
-					utils.DecorateText("⇢ image resizing process aborted by the user...", utils.DefaultMessage),
+					utils.DecorateText("⇢ process aborted by the user...", utils.DefaultMessage),
 					utils.DecorateText("✘\n", utils.ErrorMessage),
 				)
 				g.cp.Spinner.StopMsg = errorMsg
@@ -141,17 +164,63 @@ func (g *Gui) Run() error {
 		g.cp.Spinner.RestoreCursor()
 	}
 
+	var ops op.Ops
+
 	for {
 		select {
 		case e := <-w.Events():
 			switch e := e.(type) {
 			case system.FrameEvent:
-				g.draw(w, e)
-			case key.Event:
-				switch e.Name {
-				case key.NameEscape:
-					w.Close()
+				gtx := layout.NewContext(&ops, e)
+
+				key.InputOp{Tag: w, Keys: key.NameEscape}.Add(gtx.Ops)
+				for _, ev := range gtx.Queue.Events(w) {
+					if e, ok := ev.(key.Event); ok && e.Name == key.NameEscape {
+						w.Perform(system.ActionClose)
+					}
 				}
+
+				{ // red
+					if descRed {
+						rc--
+					} else {
+						rc++
+					}
+					if rc >= redEnd {
+						descRed = !descRed
+					}
+					if rc == redStart {
+						descRed = !descRed
+					}
+				}
+				{ // green
+					if descGreen {
+						gc--
+					} else {
+						gc++
+					}
+					if gc >= greenEnd {
+						descGreen = !descGreen
+					}
+					if gc == greenStart {
+						descGreen = !descGreen
+					}
+				}
+				{ // blue
+					if descBlue {
+						bc--
+					} else {
+						bc++
+					}
+					if bc >= blueEnd {
+						descBlue = !descBlue
+					}
+					if bc == blueStart {
+						descBlue = !descBlue
+					}
+				}
+				g.draw(gtx, color.NRGBA{R: rc, G: gc, B: bc})
+				e.Frame(gtx.Ops)
 			case system.DestroyEvent:
 				abortFn()
 				return e.Err
@@ -161,14 +230,13 @@ func (g *Gui) Run() error {
 				g.proc.isDone = true
 				break
 			}
+			if resizeXY {
+				continue
+			}
 			g.proc.img = res.img
 			g.proc.seams = res.carver.Seams
 			if g.cp.vRes {
 				g.proc.img = res.carver.RotateImage270(g.proc.img.(*image.NRGBA))
-			}
-
-			if resizeBothSide {
-				continue
 			}
 
 			w.Invalidate()
@@ -176,120 +244,166 @@ func (g *Gui) Run() error {
 	}
 }
 
+type (
+	C = layout.Context
+	D = layout.Dimensions
+)
+
 // draw draws the resized image in the GUI window (obtained from a channel)
 // and in case the debug mode is activated it prints out the seams.
-func (g *Gui) draw(win *app.Window, e system.FrameEvent) {
-	g.ctx = layout.NewContext(g.ctx.Ops, e)
-	win.Invalidate()
-
+func (g *Gui) draw(gtx layout.Context, bgCol color.NRGBA) {
 	c := g.setColor(g.cfg.color.background)
-	paint.Fill(g.ctx.Ops, c)
+	paint.Fill(gtx.Ops, c)
 
 	if g.proc.img != nil {
 		src := paint.NewImageOp(g.proc.img)
-		src.Add(g.ctx.Ops)
+		src.Add(gtx.Ops)
 
-		layout.Flex{
-			Axis: layout.Horizontal,
-		}.Layout(g.ctx,
-			layout.Flexed(1, func(gtx C) D {
-				paint.FillShape(gtx.Ops, c,
-					clip.Rect{Max: g.ctx.Constraints.Max}.Op(),
-				)
-				return layout.UniformInset(unit.Px(0)).Layout(gtx,
-					func(gtx C) D {
-						widget.Image{
-							Src:   src,
-							Scale: 1 / float32(g.ctx.Px(unit.Dp(1))),
-							Fit:   widget.Contain,
-						}.Layout(gtx)
+		widget.Image{
+			Src:   src,
+			Scale: 1 / float32(unit.Dp(1)),
+			Fit:   widget.Contain,
+		}.Layout(gtx)
 
-						if g.cp.Debug {
-							var ratio float32
-							tr := f32.Affine2D{}
-							screen := layout.FPt(g.ctx.Constraints.Max)
-							width, height := float32(g.proc.img.Bounds().Dx()), float32(g.proc.img.Bounds().Dy())
-							sw, sh := float32(screen.X), float32(screen.Y)
+		if g.cp.Debug {
+			var ratio float32 = 1
+			tr := f32.Affine2D{}
+			screen := layout.FPt(gtx.Constraints.Max)
+			width, height := float32(g.proc.img.Bounds().Dx()), float32(g.proc.img.Bounds().Dy())
+			sw, sh := float32(screen.X), float32(screen.Y)
 
-							if sw > width {
-								ratio = sw / width
-								tr = tr.Scale(f32.Pt(sw/2, sh/2), f32.Pt(1, ratio))
-							} else if sh > height {
-								ratio = sh / height
-								tr = tr.Scale(f32.Pt(sw/2, sh/2), f32.Pt(ratio, 1))
-							}
+			if sw > width {
+				ratio = sw / width
+				tr = tr.Scale(f32.Pt(sw/2, sh/2), f32.Pt(1, ratio))
+			} else if sh > height {
+				ratio = sh / height
+				tr = tr.Scale(f32.Pt(sw/2, sh/2), f32.Pt(ratio, 1))
+			}
 
-							if g.cp.vRes {
-								angle := float32(270 * math.Pi / 180)
-								half := float32(math.Round(float64(sh*0.5-height*0.5) * 0.5))
+			if g.cp.vRes {
+				angle := float32(270 * math.Pi / 180)
+				half := float32(math.Round(float64(sh*0.5-height*0.5) * 0.5))
 
-								ox := math.Abs(float64(sw - (sw - (sw/2 - sh/2))))
-								oy := math.Abs(float64(sh - (sh - (sw/2 - height/2 + half))))
-								tr = tr.Rotate(f32.Pt(sw/2, sh/2), -angle)
+				ox := math.Abs(float64(sw - (sw - (sw/2 - sh/2))))
+				oy := math.Abs(float64(sh - (sh - (sw/2 - height/2 + half))))
+				tr = tr.Rotate(f32.Pt(sw/2, sh/2), -angle)
 
-								if screen.X > screen.Y {
-									tr = tr.Offset(f32.Pt(float32(ox), float32(oy)))
-								} else {
-									tr = tr.Offset(f32.Pt(float32(-ox), float32(-oy)))
-								}
-							}
-							op.Affine(tr).Add(gtx.Ops)
+				if screen.X > screen.Y {
+					tr = tr.Offset(f32.Pt(float32(ox), float32(oy)))
+				} else {
+					tr = tr.Offset(f32.Pt(float32(-ox), float32(-oy)))
+				}
+			}
+			op.Affine(tr).Add(gtx.Ops)
 
-							for _, s := range g.proc.seams {
-								g.DrawSeam(g.cp.ShapeType, float64(s.X), float64(s.Y), 1)
-							}
-						}
-						return layout.Dimensions{Size: gtx.Constraints.Max}
-					})
-			}),
-		)
+			for _, s := range g.proc.seams {
+				var dpi unit.Dp
+				dpx := unit.Dp(s.X)
+				dpy := unit.Dp(s.Y)
+
+				if int(screen.Y) > len(g.proc.seams) {
+					// Apply the pixel to dpi conversion formula in case
+					// the screen height is greather than the image height.
+					dpi = unit.Dp(float32(g.cfg.window.h) * 0.4 / float32(160))
+				}
+				g.DrawSeam(gtx, g.cp.ShapeType, float32(dpx), float32(dpy*dpi), 1)
+			}
+		}
 	}
 
 	// Disable the preview mode and warn the user in case the image is resized both horizontally and vertically.
-	if resizeBothSide {
-		var (
-			msg   string
-			fgcol color.NRGBA
-			bgcol color.NRGBA
-		)
+	if resizeXY {
+		var msg string
 
 		if !g.proc.isDone {
 			msg = "Preview is not available while the image is resized both horizontally and vertically!"
-			bgcol = color.NRGBA{R: 245, G: 228, B: 215, A: 0xff}
-			fgcol = color.NRGBA{R: 3, G: 18, B: 14, A: 0xff}
 		} else {
 			msg = "Done, you may close this window!"
-			bgcol = color.NRGBA{R: 15, G: 139, B: 141, A: 0xff}
-			fgcol = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
-
+			bgCol = color.NRGBA{R: 45, G: 45, B: 42, A: 0xff}
 		}
-		displayMessage(e, g.ctx, bgcol, fgcol, msg)
+		g.displayMessage(gtx, bgCol, msg)
 	}
-	e.Frame(g.ctx.Ops)
 }
 
 // displayMessage show a static message when the image is resized both horizontally and vertically.
-func displayMessage(e system.FrameEvent, ctx layout.Context, bgcol, fgcol color.NRGBA, msg string) {
-	var th = material.NewTheme(gofont.Collection())
-	th.Palette.Fg = fgcol
-	paint.ColorOp{Color: bgcol}.Add(ctx.Ops)
+func (g *Gui) displayMessage(ctx layout.Context, bgCol color.NRGBA, msg string) {
+	th := material.NewTheme(gofont.Collection())
+	th.Palette.Fg = color.NRGBA{R: 251, G: 254, B: 249, A: 0xff}
+	paint.ColorOp{Color: bgCol}.Add(ctx.Ops)
 
 	rect := image.Rectangle{
-		Max: image.Point{X: e.Size.X, Y: e.Size.Y},
+		Max: ctx.Constraints.Max,
 	}
+
 	defer clip.Rect(rect).Push(ctx.Ops).Pop()
 	paint.PaintOp{}.Add(ctx.Ops)
 
-	layout.Flex{
-		Axis:      layout.Horizontal,
-		Alignment: layout.Middle,
-	}.Layout(ctx,
-		layout.Flexed(1, func(gtx C) D {
+	layout.Stack{}.Layout(ctx,
+		layout.Stacked(func(gtx C) D {
+			return layout.UniformInset(unit.Dp(4)).Layout(ctx, func(gtx C) D {
+				if !g.proc.isDone {
+					gtx.Constraints.Min.Y = 0
+					tr := f32.Affine2D{}
+					dr := image.Rectangle{Max: gtx.Constraints.Min}
+
+					tr = tr.Rotate(f32.Pt(float32(ctx.Constraints.Max.X/2), float32(ctx.Constraints.Max.Y/2)), 0.005*-g.cfg.angle)
+					op.Affine(tr).Add(gtx.Ops)
+
+					since := time.Since(g.cfg.timeStamp)
+
+					if since.Seconds() > 5 {
+						g.cfg.timeStamp = time.Now()
+						g.cfg.color.randR = uint8(random(1, 2))
+						g.cfg.color.randG = uint8(random(1, 2))
+						g.cfg.color.randB = uint8(random(1, 2))
+					}
+
+					paint.LinearGradientOp{
+						Stop1:  layout.FPt(dr.Min.Div(2)),
+						Stop2:  layout.FPt(dr.Max.Mul(2)),
+						Color1: color.NRGBA{R: 41, G: bgCol.G * g.cfg.color.randG, B: bgCol.B * g.cfg.color.randB, A: 0xFF},
+						Color2: color.NRGBA{R: bgCol.R * g.cfg.color.randR, G: 29, B: 54, A: 0xFF},
+					}.Add(gtx.Ops)
+					paint.PaintOp{}.Add(gtx.Ops)
+
+					if g.cfg.chrot {
+						g.cfg.angle--
+					} else {
+						g.cfg.angle++
+					}
+					if g.cfg.angle == -90 || g.cfg.angle == 90 {
+						g.cfg.chrot = !g.cfg.chrot
+					}
+				}
+
+				return layout.Dimensions{
+					Size: gtx.Constraints.Max,
+				}
+			})
+		}),
+		layout.Stacked(func(gtx C) D {
 			return layout.UniformInset(unit.Dp(4)).Layout(ctx, func(gtx C) D {
 				return layout.Center.Layout(ctx, func(gtx C) D {
-					return material.Label(th, unit.Sp(45), msg).Layout(gtx)
+					return material.Label(th, unit.Sp(40), msg).Layout(gtx)
 				})
 			})
-		},
-		))
+		}),
+		layout.Stacked(func(gtx C) D {
+			info := "(You will be notified once the process is finished.)"
+			if g.proc.isDone {
+				return layout.Dimensions{}
+			}
+
+			return layout.Inset{Top: 70}.Layout(ctx, func(gtx C) D {
+				return layout.Center.Layout(ctx, func(gtx C) D {
+					return material.Label(th, unit.Sp(13), info).Layout(gtx)
+				})
+			})
+		}),
+	)
+}
+
+// random generates a random number between two numbers.
+func random(min, max float32) float32 {
+	return rand.Float32()*(max-min) + min
 }

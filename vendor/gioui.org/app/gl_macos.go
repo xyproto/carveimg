@@ -7,12 +7,18 @@ package app
 
 import (
 	"errors"
+	"runtime"
+
+	"unsafe"
 
 	"gioui.org/gpu"
 	"gioui.org/internal/gl"
 )
 
 /*
+#cgo CFLAGS: -DGL_SILENCE_DEPRECATION -xobjective-c -fobjc-arc
+#cgo LDFLAGS: -framework OpenGL
+
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <AppKit/AppKit.h>
@@ -34,8 +40,6 @@ static void glFlush(PFN_glFlush f) {
 }
 */
 import "C"
-
-import "unsafe"
 
 type glContext struct {
 	c    *gl.Functions
@@ -95,6 +99,9 @@ func (c *glContext) Present() error {
 }
 
 func (c *glContext) Lock() error {
+	// OpenGL contexts are implicit and thread-local. Lock the OS thread.
+	runtime.LockOSThread()
+
 	C.gio_lockContext(c.ctx)
 	C.gio_makeCurrentContext(c.ctx)
 	return nil

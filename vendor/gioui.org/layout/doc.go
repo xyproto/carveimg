@@ -3,7 +3,7 @@
 /*
 Package layout implements layouts common to GUI programs.
 
-Constraints and dimensions
+# Constraints and dimensions
 
 Constraints and dimensions form the interface between layouts and
 interface child elements. This package operates on Widgets, functions
@@ -16,7 +16,7 @@ For example, to add space above a widget:
 	var gtx layout.Context
 
 	// Configure a top inset.
-	inset := layout.Inset{Top: unit.Dp(8), ...}
+	inset := layout.Inset{Top: 8, ...}
 	// Use the inset to lay out a widget.
 	inset.Layout(gtx, func() {
 		// Lay out widget and determine its size given the constraints
@@ -45,6 +45,5 @@ This example both aligns and insets a child:
 
 More complex layouts such as Stack and Flex lay out multiple children,
 and stateful layouts such as List accept user input.
-
 */
 package layout

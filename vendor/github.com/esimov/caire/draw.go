@@ -6,6 +6,7 @@ import (
 	"math"
 
 	"gioui.org/f32"
+	"gioui.org/layout"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/unit"
@@ -19,20 +20,20 @@ const (
 )
 
 // DrawSeam visualizes the seam carver in action when the preview mode is activated.
-// It receives as parameters the shape type, the seam (x,y) coordinate and a size.
-func (g *Gui) DrawSeam(shape string, x, y, s float64) {
+// It receives as parameters the shape type, the seam (x,y) coordinates and a dimmension.
+func (g *Gui) DrawSeam(gtx layout.Context, shape string, x, y, dim float32) {
 	r := getRatio(g.cfg.window.w, g.cfg.window.h)
 
 	switch shape {
 	case circle:
-		g.drawCircle(x*r, y*r, s)
+		g.drawCircle(gtx, x*r, y*r, dim)
 	case line:
-		g.drawLine(x*r, y*r, s)
+		g.drawLine(gtx, x*r, y*r, dim)
 	}
 }
 
 // EncodeSeamToImg draws the seams into an image widget.
-func (g *Gui) EncodeSeamToImg() {
+func (g *Gui) EncodeSeamToImg(gtx layout.Context) {
 	c := utils.HexToRGBA(g.cp.SeamColor)
 	g.setFillColor(c)
 
@@ -40,23 +41,23 @@ func (g *Gui) EncodeSeamToImg() {
 	r := getRatio(g.cfg.window.w, g.cfg.window.h)
 
 	for _, s := range g.proc.seams {
-		x := int(float64(s.X) * r)
-		y := int(float64(s.Y) * r)
+		x := int(float32(s.X) * r)
+		y := int(float32(s.Y) * r)
 		img.Set(x, y, g.getFillColor())
 	}
 
 	src := paint.NewImageOp(img)
-	src.Add(g.ctx.Ops)
+	src.Add(gtx.Ops)
 
 	widget.Image{
 		Src:   src,
-		Scale: 1 / float32(g.ctx.Px(unit.Dp(1))),
+		Scale: 1 / float32(unit.Dp(1)),
 		Fit:   widget.Contain,
-	}.Layout(g.ctx)
+	}.Layout(gtx)
 }
 
 // drawCircle draws a circle at the seam (x,y) coordinate with the provided size.
-func (g *Gui) drawCircle(x, y, s float64) {
+func (g *Gui) drawCircle(gtx layout.Context, x, y, s float32) {
 	var (
 		sq   float64
 		p1   f32.Point
@@ -64,33 +65,33 @@ func (g *Gui) drawCircle(x, y, s float64) {
 		orig = g.point(x-s, y)
 	)
 
-	sq = math.Sqrt(s*s - s*s)
-	p1 = g.point(x+sq, y).Sub(orig)
-	p2 = g.point(x-sq, y).Sub(orig)
+	sq = math.Sqrt(float64(s*s) - float64(s*s))
+	p1 = g.point(x+float32(sq), y).Sub(orig)
+	p2 = g.point(x-float32(sq), y).Sub(orig)
 
 	col := utils.HexToRGBA(g.cp.SeamColor)
 	g.setFillColor(col)
 
 	var path clip.Path
-	path.Begin(g.ctx.Ops)
+	path.Begin(gtx.Ops)
 	path.Move(orig)
 	path.Arc(p1, p2, 2*math.Pi)
 	path.Close()
 
-	defer clip.Outline{Path: path.End()}.Op().Push(g.ctx.Ops).Pop()
-	paint.ColorOp{Color: g.setColor(g.getFillColor())}.Add(g.ctx.Ops)
-	paint.PaintOp{}.Add(g.ctx.Ops)
+	defer clip.Outline{Path: path.End()}.Op().Push(gtx.Ops).Pop()
+	paint.ColorOp{Color: g.setColor(g.getFillColor())}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
 }
 
 // drawLine draws a line at the seam (x,y) coordinate with the provided line thickness.
-func (g *Gui) drawLine(x, y, s float64) {
+func (g *Gui) drawLine(gtx layout.Context, x, y, thickness float32) {
 	var (
 		p1   = g.point(x, y)
 		p2   = g.point(x, y+1)
 		path clip.Path
 	)
 
-	path.Begin(g.ctx.Ops)
+	path.Begin(gtx.Ops)
 	path.Move(p1)
 	path.Line(p2.Sub(path.Pos()))
 	path.Close()
@@ -98,16 +99,16 @@ func (g *Gui) drawLine(x, y, s float64) {
 	col := utils.HexToRGBA(g.cp.SeamColor)
 	g.setFillColor(col)
 
-	defer clip.Stroke{Path: path.End(), Width: float32(s)}.Op().Push(g.ctx.Ops).Pop()
-	paint.ColorOp{Color: g.setColor(g.getFillColor())}.Add(g.ctx.Ops)
-	paint.PaintOp{}.Add(g.ctx.Ops)
+	defer clip.Stroke{Path: path.End(), Width: float32(thickness)}.Op().Push(gtx.Ops).Pop()
+	paint.ColorOp{Color: g.setColor(g.getFillColor())}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
 }
 
 // point converts the seam (x,y) coordinate to Gio f32.Point.
-func (g *Gui) point(x, y float64) f32.Point {
+func (g *Gui) point(x, y float32) f32.Point {
 	return f32.Point{
-		X: float32(x),
-		Y: float32(y),
+		X: x,
+		Y: y,
 	}
 }
 
@@ -133,12 +134,13 @@ func (g *Gui) getFillColor() color.Color {
 }
 
 // getRatio returns the image aspect ratio.
-func getRatio(w, h float64) float64 {
-	var r float64 = 1
+func getRatio(w, h float32) float32 {
+	var r float32 = 1
 	if w > maxScreenX && h > maxScreenY {
-		wr := float64(maxScreenX) / float64(w) // width ratio
-		hr := float64(maxScreenY) / float64(h) // height ratio
-		r = math.Min(wr, hr)
+		wr := maxScreenX / float32(w) // width ratio
+		hr := maxScreenY / float32(h) // height ratio
+
+		r = utils.Min(wr, hr)
 	}
 	return r
 }
