@@ -29,6 +29,6 @@ The `preview` utility can be installed with Go 1.17 or later:
 
 ## General info
 
-* Version: 1.0.2
+* Version: 1.1.0
 * License: BSD-3
 * Author: Alexander F. Rødseth &lt;xyproto@archlinux.org&gt;

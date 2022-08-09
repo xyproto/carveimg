@@ -9,7 +9,7 @@ import (
 	"github.com/xyproto/vt100"
 )
 
-const versionString = "preview 1.0.2"
+const versionString = "preview 1.1.0"
 
 func main() {
 	if len(os.Args) <= 1 {
