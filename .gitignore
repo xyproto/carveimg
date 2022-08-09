@@ -4,4 +4,4 @@
 *.swp
 *~
 include.txt
-cmd/artsy/artsy
+cmd/preview/preview
