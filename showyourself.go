@@ -1,12 +1,16 @@
-package artsy
+package preview
 
 import (
 	"errors"
 	"fmt"
 	"image"
 	"image/color"
+	"image/gif"
+	"image/jpeg"
 	"image/png"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/xyproto/palgen"
 	"github.com/xyproto/vt100"
@@ -28,15 +32,25 @@ func ConvertToNRGBA(img image.Image) (*image.NRGBA, error) {
 	return nImage, nil
 }
 
-// LoadImage loads a PNG image and converts it to *image.NRGBA
+// LoadImage loads an image and converts it to *image.NRGBA.
+// Currently, PNG, GIF and JPEG images are supported.
 func LoadImage(filename string) (*image.NRGBA, error) {
 	f, err := os.Open(filename)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+
+	var img image.Image
 	// Read and decode the image
-	img, err := png.Decode(f)
+	switch filepath.Ext(strings.ToLower(filename)) {
+	case ".jpg", ".jpeg":
+		img, err = jpeg.Decode(f)
+	case ".gif":
+		img, err = gif.Decode(f)
+	case ".png":
+		img, err = png.Decode(f)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -14,7 +14,7 @@ const versionString = "preview 1.0.2"
 func main() {
 	if len(os.Args) <= 1 {
 		fmt.Println(versionString)
-		fmt.Fprintln(os.Stderr, "Please supply a PNG filename")
+		fmt.Fprintln(os.Stderr, "Please supply a GIF, JPEG or PNG image filename")
 		os.Exit(1)
 	}
 
