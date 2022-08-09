@@ -1,18 +1,19 @@
-# Preview :photo:
+# Preview :painting:
 
-16 color image viewer for the terminal that uses content-aware image resizing.
-
-## Why
-
-I wanted to develop an image viewer that could be usable from within [`o`](https://github.com/xyproto/o), a small editor/IDE I wrote that targets VT100 compatible terminal emulators.
+This is a quick and handy image viewer for the terminal.
 
 ## Features and limitations
 
-* The content-aware image resizing changes the image, but keeps the most interesting content.
-* The image resizing is done with [`caire`](https://github.com/esimov/caire).
-* The palette reduction is done with [`palgen`](https://github.com/xyproto/palgen).
+* Uses only 16 colors.
+* Gives a good preview of an image. The image is stretched, but most of the contents are there.
+* Uses content-aware image resizing.
 
-## Comparison
+## Technical info
+
+* The image resizing is done by the [`caire`](https://github.com/esimov/caire) package.
+* The palette reduction is done by the [`palgen`](https://github.com/xyproto/palgen) package.
+
+## Example preview
 
 | Original PNG image                    | In a VT100 compatible terminal emulator, using 16 colors |
 |---------------------------------------|----------------------------------------------------------|
