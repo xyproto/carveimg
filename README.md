@@ -1,4 +1,4 @@
-# Artsy :paintbrush:
+# Preview :photo:
 
 16 color image viewer for the terminal that uses content-aware image resizing.
 
@@ -16,16 +16,15 @@ I wanted to develop an image viewer that could be usable from within [`o`](https
 
 | Original PNG image                    | In a VT100 compatible terminal emulator, using 16 colors |
 |---------------------------------------|----------------------------------------------------------|
-| <img src=img/archbtw.png width=512>   |              <img src=img/archbtw16colors.png width=512> |
 | <img src=img/grumpycat.png width=512> |            <img src=img/grumpycat16colors.png width=512> |
 
 The images are changed, but the essence is kept.
 
 ## Installation
 
-The `artsy` utility can be installed with Go 1.17 or later:
+The `preview` utility can be installed with Go 1.17 or later:
 
-    go install github.com/xyproto/artsy/cmd/artsy@latest
+    go install github.com/xyproto/preview/cmd/preview@latest
 
 ## General info
 
