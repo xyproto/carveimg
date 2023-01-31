@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/esimov/caire"
-	"github.com/xyproto/preview"
+	"github.com/xyproto/carveimg"
 	"github.com/xyproto/vt100"
 )
 

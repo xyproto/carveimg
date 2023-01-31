@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/xyproto/preview"
+	"github.com/xyproto/carveimg"
 	"github.com/xyproto/vt100"
 	"golang.org/x/image/draw"
 )

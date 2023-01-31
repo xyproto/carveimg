@@ -19,8 +19,8 @@ Two image viewing utilities for the terminal. Both of them displays images in on
 
 With Go 1.17 or later:
 
-    go install github.com/xyproto/preview/cmd/img@latest
-    go install github.com/xyproto/preview/cmd/carve@latest
+    go install github.com/xyproto/carveimg/cmd/img@latest
+    go install github.com/xyproto/carveimg/cmd/carve@latest
 
 ## The `carve` utility
 

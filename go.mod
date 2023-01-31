@@ -1,4 +1,4 @@
-module github.com/xyproto/preview
+module github.com/xyproto/carveimg
 
 go 1.18
 

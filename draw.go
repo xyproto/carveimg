@@ -1,4 +1,4 @@
-package preview
+package carveimg
 
 import (
 	"errors"
