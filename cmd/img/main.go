@@ -38,7 +38,7 @@ func main() {
 	height := int(c.Height())
 
 	// Load the given filename
-	nImage, err := preview.LoadImage(filename)
+	nImage, err := carveimg.LoadImage(filename)
 	if err != nil {
 		vt100.Close()
 		fmt.Fprintf(os.Stderr, "Could not load %s: %s\n", filename, err)
@@ -52,7 +52,7 @@ func main() {
 	imageResizeFunction.Scale(resizedImage, resizedImage.Rect, nImage, nImage.Bounds(), draw.Over, nil)
 
 	// Draw the image to the canvas, using only the basic 16 colors
-	if err := preview.Draw(c, resizedImage); err != nil {
+	if err := carveimg.Draw(c, resizedImage); err != nil {
 		vt100.Close()
 		fmt.Fprintln(os.Stderr, "Could not draw image: %s\n", err)
 		os.Exit(1)
