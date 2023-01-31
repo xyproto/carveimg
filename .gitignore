@@ -4,4 +4,5 @@
 *.swp
 *~
 include.txt
-cmd/preview/preview
+cmd/carve/carve
+cmd/img/img
