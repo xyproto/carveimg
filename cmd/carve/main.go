@@ -3,13 +3,14 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/esimov/caire"
 	"github.com/xyproto/preview"
 	"github.com/xyproto/vt100"
 )
 
-const versionString = "preview 1.1.0"
+const versionString = "carve 1.2.0"
 
 func main() {
 	if len(os.Args) <= 1 {
@@ -73,7 +74,8 @@ func main() {
 	}
 
 	// Output the filename on top of the image
-	//c.Write(10, 10, vt100.LightBlue, vt100.BackgroundDefault, filename)
+	baseFilename := filepath.Base(filename)
+	c.Write(uint((width-len(baseFilename))/2), 0, vt100.LightBlue, vt100.BackgroundDefault, baseFilename)
 
 	// Draw the contents of the canvas to the screen
 	c.Draw()
@@ -83,5 +85,4 @@ func main() {
 
 	// Reset the vt100 terminal settings
 	vt100.Close()
-
 }
