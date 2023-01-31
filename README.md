@@ -11,9 +11,9 @@ Two image viewing utilities for the terminal. Both of them displays images in on
 |---------------------------------------|----------------------------------------------------------------------------------------------|
 | <img src=img/grumpycat.png width=512> |                                                <img src=img/grumpycat16colors.png width=512> |
 
-| Original PNG image                    | In `carve`                                               | In `img`                                         |
-|---------------------------------------|----------------------------------------------------------|--------------------------------------------------|
-| <img src=img/goals_objectives.png width=512> |<img src=img/goals_objectives_carve.png width=512> | <img src=img/goals_objectives_img.png width=512> |
+| Original PNG image                           | In `carve` (wonky, but higher information density)       | In `img` (may look better, but retains less information |
+|----------------------------------------------|----------------------------------------------------------|---------------------------------------------------------|
+| <img src=img/goals_objectives.png width=512> |<img src=img/goals_objectives_carve.png width=512>        | <img src=img/goals_objectives_img.png width=512>        |
 
 ## Installation
 
