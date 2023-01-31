@@ -108,10 +108,11 @@ golang.org/x/exp/constraints
 golang.org/x/exp/shiny/iconvg
 golang.org/x/exp/shiny/iconvg/internal/gradient
 golang.org/x/exp/shiny/materialdesign/icons
-# golang.org/x/image v0.0.0-20220722155232-062f8c9fd539
+# golang.org/x/image v0.3.0
 ## explicit; go 1.12
 golang.org/x/image/bmp
 golang.org/x/image/ccitt
+golang.org/x/image/draw
 golang.org/x/image/font
 golang.org/x/image/font/gofont/gobold
 golang.org/x/image/font/gofont/gobolditalic
@@ -136,7 +137,7 @@ golang.org/x/image/vector
 golang.org/x/sys/internal/unsafeheader
 golang.org/x/sys/unix
 golang.org/x/sys/windows
-# golang.org/x/text v0.3.7
+# golang.org/x/text v0.6.0
 ## explicit; go 1.17
 golang.org/x/text/encoding
 golang.org/x/text/encoding/charmap

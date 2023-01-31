@@ -6,6 +6,7 @@ require (
 	github.com/esimov/caire v1.4.5-0.20220809150316-060be3795129
 	github.com/xyproto/palgen v1.2.0
 	github.com/xyproto/vt100 v1.11.3
+	golang.org/x/image v0.3.0
 )
 
 require (
@@ -21,7 +22,6 @@ require (
 	github.com/pkg/term v1.2.0-beta.2.0.20210419004637-f749b98bd0ba // indirect
 	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e // indirect
 	golang.org/x/exp/shiny v0.0.0-20220722155223-a9213eeb770e // indirect
-	golang.org/x/image v0.0.0-20220722155232-062f8c9fd539 // indirect
 	golang.org/x/sys v0.4.0 // indirect
-	golang.org/x/text v0.3.7 // indirect
+	golang.org/x/text v0.6.0 // indirect
 )
