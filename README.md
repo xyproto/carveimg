@@ -7,9 +7,9 @@ Two image viewing utilities for the terminal. Both of them displays images in on
 
 ## Screenshots
 
-| Original PNG image                    | In a VT100 compatible terminal emulator, using 16 colors |
-|---------------------------------------|----------------------------------------------------------|
-| <img src=img/grumpycat.png width=512> |            <img src=img/grumpycat16colors.png width=512> |
+| Original PNG image                    | In a VT100 compatible terminal emulator, using seam carving for content-aware image resizing |
+|---------------------------------------|----------------------------------------------------------------------------------------------|
+| <img src=img/grumpycat.png width=512> |                                                <img src=img/grumpycat16colors.png width=512> |
 
 ## Installation
 
