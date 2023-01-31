@@ -13,7 +13,7 @@ Two image viewing utilities for the terminal. Both of them displays images in on
 
 | Original PNG image                    | In `img`                                                       | In `carve`                                             |
 |---------------------------------------|----------------------------------------------------------------|--------------------------------------------------------|
-| <img src=img/goals_and_objectives.png width=512> |<img src=img/goals_and_objectives_img.png width=512> | <img src=img/goals_and_objectives_carve.png width=512> |
+| <img src=img/goals_objectives.png width=512> |<img src=img/goals_objectives_img.png width=512> | <img src=img/goals_objectives_carve.png width=512> |
 
 ## Installation
 
