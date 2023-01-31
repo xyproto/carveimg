@@ -11,7 +11,7 @@ import (
 	"golang.org/x/image/draw"
 )
 
-const versionString = "img 1.2.2"
+const versionString = "img 1.2.3"
 
 // var imageResizeFunction = draw.NearestNeighbor
 // var imageResizeFunction = draw.ApproxBiLinear

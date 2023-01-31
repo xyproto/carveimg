@@ -10,7 +10,7 @@ import (
 	"github.com/xyproto/vt100"
 )
 
-const versionString = "carve 1.2.2"
+const versionString = "carve 1.2.3"
 
 func main() {
 	if len(os.Args) <= 1 {
