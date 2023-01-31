@@ -26,7 +26,7 @@ With Go 1.17 or later:
 
 ## The `img` utilitiy
 
-* The image resizing is done with [`golang.org/x/image/draw`](https://golang.org/x/image/draw).
+* The image resizing is done with [`golang.org/x/image/draw`](https://golang.org/x/image/draw) and the [`CatmullRom`](https://pkg.go.dev/golang.org/x/image@v0.3.0/draw#pkg-variables) kernel.
 * The palette reduction is done with [`github.com/xyproto/palgen`](https://github.com/xyproto/palgen).
 
 ## General info

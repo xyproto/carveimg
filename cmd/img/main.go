@@ -13,6 +13,11 @@ import (
 
 const versionString = "img 1.2.0"
 
+// var imageResizeFunction = draw.NearestNeighbor
+// var imageResizeFunction = draw.ApproxBiLinear
+// var imageResizeFunction = draw.BiLinear
+var imageResizeFunction = draw.CatmullRom
+
 func main() {
 	if len(os.Args) <= 1 {
 		fmt.Println(versionString)
@@ -44,7 +49,7 @@ func main() {
 	resizedImage := image.NewRGBA(image.Rect(0, 0, width, height))
 
 	// Resize the image
-	draw.NearestNeighbor.Scale(resizedImage, resizedImage.Rect, nImage, nImage.Bounds(), draw.Over, nil)
+	imageResizeFunction.Scale(resizedImage, resizedImage.Rect, nImage, nImage.Bounds(), draw.Over, nil)
 
 	// Draw the image to the canvas, using only the basic 16 colors
 	if err := preview.Draw(c, resizedImage); err != nil {
