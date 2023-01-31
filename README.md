@@ -1,4 +1,4 @@
-# carve & img
+# Carve & Img
 
 Two image viewing utilities for the terminal. Both of them displays images in only 16 colors.
 
