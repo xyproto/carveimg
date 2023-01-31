@@ -6,6 +6,7 @@ require (
 	github.com/biessek/golang-ico v0.0.0-20180326222316-d348d9ea4670
 	github.com/esimov/caire v1.4.5-0.20220809150316-060be3795129
 	github.com/jsummers/gobmp v0.0.0-20151104160322-e2ba15ffa76e
+	github.com/kolesa-team/go-webp v1.0.2
 	github.com/xyproto/palgen v1.2.0
 	github.com/xyproto/vt100 v1.11.3
 	golang.org/x/image v0.3.0
