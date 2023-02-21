@@ -1,6 +1,6 @@
 # Carve & Img
 
-Two image viewing utilities for the terminal. Both of them displays images in only 16 colors.
+Two image viewing utilities for the terminal. Both of them can display images in only 16 colors.
 
 * `carve` - uses content-aware image resizing before displaying the image
 * `img` - uses regular image resizing before displaying the image
