@@ -11,7 +11,7 @@ import (
 	"golang.org/x/image/draw"
 )
 
-const versionString = "img 1.3.3"
+const versionString = "img 1.4.0"
 
 // var imageResizeFunction = draw.NearestNeighbor
 // var imageResizeFunction = draw.ApproxBiLinear
@@ -21,7 +21,7 @@ var imageResizeFunction = draw.CatmullRom
 func main() {
 	if len(os.Args) <= 1 {
 		fmt.Println(versionString)
-		fmt.Fprintln(os.Stderr, "Please supply a GIF, JPEG or PNG image filename")
+		fmt.Fprintln(os.Stderr, "Please supply a GIF, JPEG, PNG or WEBP image filename")
 		os.Exit(1)
 	}
 

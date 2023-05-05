@@ -10,12 +10,12 @@ import (
 	"github.com/xyproto/vt100"
 )
 
-const versionString = "carve 1.3.3"
+const versionString = "carve 1.4.0"
 
 func main() {
 	if len(os.Args) <= 1 {
 		fmt.Println(versionString)
-		fmt.Fprintln(os.Stderr, "Please supply a GIF, JPEG or PNG image filename")
+		fmt.Fprintln(os.Stderr, "Please supply a GIF, JPEG, PNG or WEBP image filename")
 		os.Exit(1)
 	}
 
