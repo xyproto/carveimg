@@ -1,14 +1,14 @@
 module github.com/xyproto/carveimg
 
-go 1.18
+go 1.21
 
 require (
-	github.com/biessek/golang-ico v0.0.0-20180326222316-d348d9ea4670
+	github.com/dkua/go-ico v0.0.0-20161218204303-1c25f691ce06
 	github.com/esimov/caire v1.4.5-0.20220809150316-060be3795129
-	github.com/jsummers/gobmp v0.0.0-20151104160322-e2ba15ffa76e
-	github.com/xyproto/palgen v1.4.0
-	github.com/xyproto/vt100 v1.11.5
-	golang.org/x/image v0.7.0
+	github.com/jsummers/gobmp v0.0.0-20230614200233-a9de23ed2e25
+	github.com/xyproto/palgen v1.5.0
+	github.com/xyproto/vt100 v1.12.7
+	golang.org/x/image v0.11.0
 )
 
 require (
@@ -21,11 +21,13 @@ require (
 	github.com/gioui/uax v0.2.1-0.20220325163150-e3d987515a12 // indirect
 	github.com/go-text/typesetting v0.0.0-20220411150340-35994bc27a7b // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
-	github.com/peterhellberg/gfx v0.0.0-20210905153911-4a6ef1535e02 // indirect
+	github.com/nathan-fiscaletti/consolesize-go v0.0.0-20220204101620-317176b6684d // indirect
+	github.com/peterhellberg/gfx v0.0.0-20230526095554-e6202e653d52 // indirect
 	github.com/pkg/term v1.2.0-beta.2.0.20210419004637-f749b98bd0ba // indirect
+	github.com/stretchr/testify v1.8.4 // indirect
 	github.com/xyproto/burnpal v0.0.0-20191014132200-bd9858647795 // indirect
 	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e // indirect
 	golang.org/x/exp/shiny v0.0.0-20220722155223-a9213eeb770e // indirect
-	golang.org/x/sys v0.8.0 // indirect
-	golang.org/x/text v0.9.0 // indirect
+	golang.org/x/sys v0.11.0 // indirect
+	golang.org/x/text v0.12.0 // indirect
 )
