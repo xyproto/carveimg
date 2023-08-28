@@ -1,6 +1,6 @@
 module github.com/xyproto/carveimg
 
-go 1.21
+go 1.19
 
 require (
 	github.com/dkua/go-ico v0.0.0-20161218204303-1c25f691ce06
