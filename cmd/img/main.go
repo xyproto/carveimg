@@ -54,7 +54,7 @@ func main() {
 	// Draw the image to the canvas, using only the basic 16 colors
 	if err := carveimg.Draw(c, resizedImage); err != nil {
 		vt100.Close()
-		fmt.Fprintln(os.Stderr, "Could not draw image: %s\n", err)
+		fmt.Fprintf(os.Stderr, "Could not draw image: %s\n", err)
 		os.Exit(1)
 	}
 
