@@ -54,7 +54,6 @@ github.com/onsi/gomega v1.7.1/go.mod h1:XdKZgCCFLUoM/7CFJVPcG8C1xQ1AJ0vpAezJrB7J
 github.com/onsi/gomega v1.10.1/go.mod h1:iN09h71vgCQne3DLsj+A5owkum+a2tYe+TOCB1ybHNo=
 github.com/onsi/gomega v1.10.5/go.mod h1:gza4q3jKQJijlu05nKWRCW/GavJumGt8aNRxWg7mt48=
 github.com/peterhellberg/gfx v0.0.0-20191011152831-b91a0de61948/go.mod h1:itlt/V2ABb7sDu42VXQHXmQ4KOdrEbFZDVIaHsRcwak=
-github.com/peterhellberg/gfx v0.0.0-20230526095554-e6202e653d52/go.mod h1:ipo3f7y1+RHNR32fj+4TETou6OF4VXvJBhb9rwncKuw=
 github.com/peterhellberg/gfx v0.0.0-20230908181254-9885a9f73abe h1:vUyJ+2edn98NgivqhHWBQIO8u9bbrXb+U09tG0AQYbU=
 github.com/peterhellberg/gfx v0.0.0-20230908181254-9885a9f73abe/go.mod h1:ipo3f7y1+RHNR32fj+4TETou6OF4VXvJBhb9rwncKuw=
 github.com/pkg/term v1.2.0-beta.2.0.20210419004637-f749b98bd0ba h1:KVTuKXe/NMcKMIlgVuOq9cWogO8LkolqY0ienhEEYlY=
@@ -64,10 +63,10 @@ github.com/stretchr/testify v1.8.4 h1:CcVxjf3Q8PM0mHUKJCdn+eZZtm5yQwehR5yeSVQQcU
 github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
 github.com/xyproto/burnfont v1.2.3 h1:4MHSRrmVqZT8i1XmDrEG/5qcg2G1bSEDlOoO3BCl11c=
 github.com/xyproto/burnfont v1.2.3/go.mod h1:NlQwt/VHpxq17k8CkHcWvWTGhBim818XB4onh+TeZRo=
-github.com/xyproto/burnpal v0.0.0-20191014132200-bd9858647795 h1:AoL5T5pFgiCn/4feC2ZfAE+7altlWK2KwBntHHAgDpE=
-github.com/xyproto/burnpal v0.0.0-20191014132200-bd9858647795/go.mod h1:j3S/tDDOEkIChz0sWDqO3zXOgIjz/6nhuc+JrmZNLnA=
-github.com/xyproto/palgen v1.5.0 h1:JIU39lMxk2Nad1V5hrCUmH8b15R9EdwNTsAzkiII0vU=
-github.com/xyproto/palgen v1.5.0/go.mod h1:IN7HA45EecW7BTEzkJzaSZljyQdjzNp5kdUQ4gpu0T8=
+github.com/xyproto/burnpal v1.0.0 h1:cwiMfJdQKRuTWbg6XjCjBNd7c0TLCpfbxLW5bQNzU+c=
+github.com/xyproto/burnpal v1.0.0/go.mod h1:j3S/tDDOEkIChz0sWDqO3zXOgIjz/6nhuc+JrmZNLnA=
+github.com/xyproto/palgen v1.5.1 h1:pQKt1Q1z7wa45CpIh6vpTzu260RUtDfGTHs2Dw3tf5c=
+github.com/xyproto/palgen v1.5.1/go.mod h1:CNbNEV/7R9UvbF8oiS0hBdANveDfBBc4/pvQIFp5ygg=
 github.com/xyproto/vt100 v1.14.2 h1:YO796jUb0zVa9P0EqS8k/UpqYbcmY1EsOk5KXje4gPA=
 github.com/xyproto/vt100 v1.14.2/go.mod h1:DZDxocHCwx0kZTVnsyGogNYKyQ1rwDzUURDhAThjLVw=
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
