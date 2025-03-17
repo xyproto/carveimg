@@ -1,14 +1,16 @@
 module github.com/xyproto/carveimg
 
-go 1.19
+go 1.23.0
+
+toolchain go1.24.1
 
 require (
 	github.com/dkua/go-ico v0.0.0-20161218204303-1c25f691ce06
 	github.com/esimov/caire v1.4.5-0.20220809150316-060be3795129
 	github.com/jsummers/gobmp v0.0.0-20230614200233-a9de23ed2e25
-	github.com/xyproto/palgen v1.5.1
-	github.com/xyproto/vt100 v1.14.2
-	golang.org/x/image v0.14.0
+	github.com/xyproto/palgen v1.6.0
+	github.com/xyproto/vt100 v1.16.12
+	golang.org/x/image v0.25.0
 )
 
 require (
@@ -22,13 +24,14 @@ require (
 	github.com/go-text/typesetting v0.0.0-20220411150340-35994bc27a7b // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/nathan-fiscaletti/consolesize-go v0.0.0-20220204101620-317176b6684d // indirect
-	github.com/peterhellberg/gfx v0.0.0-20230908181254-9885a9f73abe // indirect
+	github.com/peterhellberg/gfx v0.0.0-20240717094052-4fa835cea5a4 // indirect
 	github.com/pkg/term v1.2.0-beta.2.0.20210419004637-f749b98bd0ba // indirect
 	github.com/stretchr/testify v1.8.4 // indirect
 	github.com/xyproto/burnfont v1.2.3 // indirect
 	github.com/xyproto/burnpal v1.0.0 // indirect
+	github.com/xyproto/env/v2 v2.5.3 // indirect
 	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e // indirect
 	golang.org/x/exp/shiny v0.0.0-20220722155223-a9213eeb770e // indirect
-	golang.org/x/sys v0.15.0 // indirect
-	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/sys v0.31.0 // indirect
+	golang.org/x/text v0.23.0 // indirect
 )
