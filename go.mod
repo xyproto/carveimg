@@ -8,9 +8,9 @@ require (
 	github.com/dkua/go-ico v0.0.0-20161218204303-1c25f691ce06
 	github.com/esimov/caire v1.4.5-0.20220809150316-060be3795129
 	github.com/jsummers/gobmp v0.0.0-20230614200233-a9de23ed2e25
-	github.com/xyproto/palgen v1.6.0
+	github.com/xyproto/palgen v1.6.1
 	github.com/xyproto/vt100 v1.16.12
-	golang.org/x/image v0.25.0
+	golang.org/x/image v0.26.0
 )
 
 require (
@@ -32,6 +32,6 @@ require (
 	github.com/xyproto/env/v2 v2.5.3 // indirect
 	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e // indirect
 	golang.org/x/exp/shiny v0.0.0-20220722155223-a9213eeb770e // indirect
-	golang.org/x/sys v0.31.0 // indirect
-	golang.org/x/text v0.23.0 // indirect
+	golang.org/x/sys v0.32.0 // indirect
+	golang.org/x/text v0.24.0 // indirect
 )
