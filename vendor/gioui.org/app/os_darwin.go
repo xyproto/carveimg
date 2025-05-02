@@ -6,7 +6,7 @@ package app
 #include <Foundation/Foundation.h>
 
 __attribute__ ((visibility ("hidden"))) void gio_wakeupMainThread(void);
-__attribute__ ((visibility ("hidden"))) CFTypeRef gio_createDisplayLink(uintptr_t handle);
+__attribute__ ((visibility ("hidden"))) CFTypeRef gio_createDisplayLink(void);
 __attribute__ ((visibility ("hidden"))) void gio_releaseDisplayLink(CFTypeRef dl);
 __attribute__ ((visibility ("hidden"))) int gio_startDisplayLink(CFTypeRef dl);
 __attribute__ ((visibility ("hidden"))) int gio_stopDisplayLink(CFTypeRef dl);
@@ -42,7 +42,7 @@ static CFTypeRef newNSString(unichar *chars, NSUInteger length) {
 import "C"
 import (
 	"errors"
-	"runtime/cgo"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf16"
@@ -70,11 +70,18 @@ type displayLink struct {
 	running uint32
 }
 
+// displayLinks maps CFTypeRefs to *displayLinks.
+var displayLinks sync.Map
+
 var mainFuncs = make(chan func(), 1)
+
+func isMainThread() bool {
+	return bool(C.isMainThread())
+}
 
 // runOnMain runs the function on the main thread.
 func runOnMain(f func()) {
-	if C.isMainThread() {
+	if isMainThread() {
 		f()
 		return
 	}
@@ -121,25 +128,25 @@ func stringToNSString(str string) C.CFTypeRef {
 	return C.newNSString(chars, C.NSUInteger(len(u16)))
 }
 
-func NewDisplayLink(callback func()) (*displayLink, error) {
+func newDisplayLink(callback func()) (*displayLink, error) {
 	d := &displayLink{
 		callback: callback,
 		done:     make(chan struct{}),
 		states:   make(chan bool),
 		dids:     make(chan uint64),
 	}
-	h := cgo.NewHandle(d)
-	dl := C.gio_createDisplayLink(C.uintptr_t(h))
+	dl := C.gio_createDisplayLink()
 	if dl == 0 {
 		return nil, errors.New("app: failed to create display link")
 	}
-	go d.run(dl, h)
+	go d.run(dl)
 	return d, nil
 }
 
-func (d *displayLink) run(dl C.CFTypeRef, h cgo.Handle) {
+func (d *displayLink) run(dl C.CFTypeRef) {
 	defer C.gio_releaseDisplayLink(dl)
-	defer h.Delete()
+	displayLinks.Store(dl, d)
+	defer displayLinks.Delete(dl)
 	var stopTimer *time.Timer
 	var tchan <-chan time.Time
 	started := false
@@ -200,10 +207,14 @@ func (d *displayLink) SetDisplayID(did uint64) {
 }
 
 //export gio_onFrameCallback
-func gio_onFrameCallback(dl C.CFTypeRef, handle C.uintptr_t) {
-	d := cgo.Handle(handle).Value().(*displayLink)
-	if atomic.LoadUint32(&d.running) != 0 {
-		d.callback()
+func gio_onFrameCallback(ref C.CFTypeRef) {
+	d, exists := displayLinks.Load(ref)
+	if !exists {
+		return
+	}
+	dl := d.(*displayLink)
+	if atomic.LoadUint32(&dl.running) != 0 {
+		dl.callback()
 	}
 }
 
@@ -253,8 +264,9 @@ func windowSetCursor(from, to pointer.Cursor) pointer.Cursor {
 	return to
 }
 
-func (w *window) Wakeup() {
+func (w *window) wakeup() {
 	runOnMain(func() {
-		w.w.Event(wakeupEvent{})
+		w.loop.Wakeup()
+		w.loop.FlushEvents()
 	})
 }

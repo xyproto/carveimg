@@ -20,7 +20,7 @@ type d3d11Context struct {
 	width, height int
 }
 
-const debug = false
+const debugDirectX = false
 
 func init() {
 	drivers = append(drivers, gpuAPI{
@@ -28,7 +28,7 @@ func init() {
 		initializer: func(w *window) (context, error) {
 			hwnd, _, _ := w.HWND()
 			var flags uint32
-			if debug {
+			if debugDirectX {
 				flags |= d3d11.CREATE_DEVICE_DEBUG
 			}
 			dev, ctx, _, err := d3d11.CreateDevice(
@@ -60,10 +60,10 @@ func (c *d3d11Context) RenderTarget() (gpu.RenderTarget, error) {
 }
 
 func (c *d3d11Context) Present() error {
-	err := c.swchain.Present(1, 0)
-	if err == nil {
-		return nil
-	}
+	return wrapErr(c.swchain.Present(1, 0))
+}
+
+func wrapErr(err error) error {
 	if err, ok := err.(d3d11.ErrorCode); ok {
 		switch err.Code {
 		case d3d11.DXGI_STATUS_OCCLUDED:
@@ -84,7 +84,7 @@ func (c *d3d11Context) Refresh() error {
 	}
 	c.releaseFBO()
 	if err := c.swchain.ResizeBuffers(0, 0, 0, d3d11.DXGI_FORMAT_UNKNOWN, 0); err != nil {
-		return err
+		return wrapErr(err)
 	}
 	c.width = width
 	c.height = height
@@ -122,7 +122,7 @@ func (c *d3d11Context) Release() {
 		d3d11.IUnknownRelease(unsafe.Pointer(c.dev), c.dev.Vtbl.Release)
 	}
 	*c = d3d11Context{}
-	if debug {
+	if debugDirectX {
 		d3d11.ReportLiveObjects()
 	}
 }

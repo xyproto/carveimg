@@ -1,13 +1,12 @@
-# gioui.org v0.0.0-20220808141521-a55065af9c1e
-## explicit; go 1.17
+# gioui.org v0.8.0
+## explicit; go 1.21
 gioui.org/app
-gioui.org/app/internal/log
 gioui.org/app/internal/windows
 gioui.org/app/internal/xkb
 gioui.org/f32
+gioui.org/font
 gioui.org/font/gofont
 gioui.org/font/opentype
-gioui.org/font/opentype/internal
 gioui.org/gesture
 gioui.org/gpu
 gioui.org/gpu/internal/d3d11
@@ -18,6 +17,7 @@ gioui.org/gpu/internal/vulkan
 gioui.org/internal/byteslice
 gioui.org/internal/cocoainit
 gioui.org/internal/d3d11
+gioui.org/internal/debug
 gioui.org/internal/egl
 gioui.org/internal/f32
 gioui.org/internal/f32color
@@ -29,10 +29,9 @@ gioui.org/internal/stroke
 gioui.org/internal/vk
 gioui.org/io/clipboard
 gioui.org/io/event
+gioui.org/io/input
 gioui.org/io/key
 gioui.org/io/pointer
-gioui.org/io/profile
-gioui.org/io/router
 gioui.org/io/semantic
 gioui.org/io/system
 gioui.org/io/transfer
@@ -44,52 +43,38 @@ gioui.org/text
 gioui.org/unit
 gioui.org/widget
 gioui.org/widget/material
-# gioui.org/cpu v0.0.0-20220412190645-f1e9e8c3b1f7
-## explicit; go 1.17
-gioui.org/cpu
-# gioui.org/shader v1.0.6
+# gioui.org/shader v1.0.8
 ## explicit; go 1.16
 gioui.org/shader
 gioui.org/shader/gio
-gioui.org/shader/piet
-# github.com/benoitkugler/textlayout v0.1.3
-## explicit; go 1.17
-github.com/benoitkugler/textlayout/fonts
-github.com/benoitkugler/textlayout/fonts/binaryreader
-github.com/benoitkugler/textlayout/fonts/glyphsnames
-github.com/benoitkugler/textlayout/fonts/psinterpreter
-github.com/benoitkugler/textlayout/fonts/simpleencodings
-github.com/benoitkugler/textlayout/fonts/truetype
-github.com/benoitkugler/textlayout/fonts/type1C
-github.com/benoitkugler/textlayout/graphite
-github.com/benoitkugler/textlayout/harfbuzz
-github.com/benoitkugler/textlayout/language
-github.com/benoitkugler/textlayout/unicodedata
 # github.com/disintegration/imaging v1.6.2
 ## explicit
 github.com/disintegration/imaging
 # github.com/dkua/go-ico v0.0.0-20161218204303-1c25f691ce06
 ## explicit
 github.com/dkua/go-ico
-# github.com/esimov/caire v1.4.5-0.20220809150316-060be3795129
-## explicit; go 1.18
+# github.com/esimov/caire v1.5.0
+## explicit; go 1.22
 github.com/esimov/caire
+github.com/esimov/caire/imop
 github.com/esimov/caire/utils
-# github.com/esimov/pigo v1.4.5
-## explicit; go 1.12
+# github.com/esimov/pigo v1.4.6
+## explicit; go 1.13
 github.com/esimov/pigo/core
-# github.com/gioui/uax v0.2.1-0.20220325163150-e3d987515a12
-## explicit; go 1.16
-github.com/gioui/uax
-github.com/gioui/uax/internal/tracing
-github.com/gioui/uax/segment
-github.com/gioui/uax/uax14
-# github.com/go-text/typesetting v0.0.0-20220411150340-35994bc27a7b
-## explicit; go 1.15
+# github.com/go-text/typesetting v0.3.0
+## explicit; go 1.19
 github.com/go-text/typesetting/di
 github.com/go-text/typesetting/font
+github.com/go-text/typesetting/font/cff
+github.com/go-text/typesetting/font/cff/interpreter
+github.com/go-text/typesetting/font/opentype
+github.com/go-text/typesetting/font/opentype/tables
+github.com/go-text/typesetting/fontscan
+github.com/go-text/typesetting/harfbuzz
 github.com/go-text/typesetting/language
+github.com/go-text/typesetting/segmenter
 github.com/go-text/typesetting/shaping
+github.com/go-text/typesetting/unicodedata
 # github.com/jsummers/gobmp v0.0.0-20230614200233-a9de23ed2e25
 ## explicit
 github.com/jsummers/gobmp
@@ -123,11 +108,12 @@ github.com/xyproto/palgen
 # github.com/xyproto/vt100 v1.16.12
 ## explicit; go 1.23.0
 github.com/xyproto/vt100
-# golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e
-## explicit; go 1.18
+# golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0
+## explicit; go 1.23.0
 golang.org/x/exp/constraints
-# golang.org/x/exp/shiny v0.0.0-20220722155223-a9213eeb770e
-## explicit; go 1.18
+golang.org/x/exp/slices
+# golang.org/x/exp/shiny v0.0.0-20250408133849-7e4ce0ab07d0
+## explicit; go 1.23.0
 golang.org/x/exp/shiny/iconvg
 golang.org/x/exp/shiny/iconvg/internal/gradient
 golang.org/x/exp/shiny/materialdesign/icons
@@ -136,7 +122,6 @@ golang.org/x/exp/shiny/materialdesign/icons
 golang.org/x/image/bmp
 golang.org/x/image/ccitt
 golang.org/x/image/draw
-golang.org/x/image/font
 golang.org/x/image/font/gofont/gobold
 golang.org/x/image/font/gofont/gobolditalic
 golang.org/x/image/font/gofont/goitalic
@@ -161,16 +146,14 @@ golang.org/x/image/vp8l
 golang.org/x/image/webp
 # golang.org/x/sys v0.32.0
 ## explicit; go 1.23.0
+golang.org/x/sys/plan9
 golang.org/x/sys/unix
 golang.org/x/sys/windows
+# golang.org/x/term v0.31.0
+## explicit; go 1.23.0
+golang.org/x/term
 # golang.org/x/text v0.24.0
 ## explicit; go 1.23.0
-golang.org/x/text/encoding
-golang.org/x/text/encoding/charmap
-golang.org/x/text/encoding/internal
-golang.org/x/text/encoding/internal/identifier
-golang.org/x/text/encoding/unicode
-golang.org/x/text/internal/utf8internal
 golang.org/x/text/runes
 golang.org/x/text/transform
-golang.org/x/text/unicode/rangetable
+golang.org/x/text/unicode/bidi

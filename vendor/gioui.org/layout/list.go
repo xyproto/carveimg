@@ -4,8 +4,10 @@ package layout
 
 import (
 	"image"
+	"math"
 
 	"gioui.org/gesture"
+	"gioui.org/io/pointer"
 	"gioui.org/op"
 	"gioui.org/op/clip"
 )
@@ -143,7 +145,26 @@ func (l *List) Dragging() bool {
 }
 
 func (l *List) update(gtx Context) {
-	d := l.scroll.Scroll(gtx.Metric, gtx, gtx.Now, gesture.Axis(l.Axis))
+	min, max := int(-inf), int(inf)
+	if l.Position.First == 0 {
+		// Use the size of the invisible part as scroll boundary.
+		min = -l.Position.Offset
+		if min > 0 {
+			min = 0
+		}
+	}
+	if l.Position.First+l.Position.Count == l.len {
+		max = -l.Position.OffsetLast
+		if max < 0 {
+			max = 0
+		}
+	}
+	xrange := pointer.ScrollRange{Min: min, Max: max}
+	yrange := pointer.ScrollRange{}
+	if l.Axis == Vertical {
+		xrange, yrange = yrange, xrange
+	}
+	d := l.scroll.Update(gtx.Metric, gtx.Source, gtx.Now, gesture.Axis(l.Axis), xrange, yrange)
 	l.scrollDelta = d
 	l.Position.Offset += d
 }
@@ -331,26 +352,40 @@ func (l *List) layout(ops *op.Ops, macro op.MacroOp) Dimensions {
 	call := macro.Stop()
 	defer clip.Rect(image.Rectangle{Max: dims}).Push(ops).Pop()
 
-	min, max := int(-inf), int(inf)
-	if l.Position.First == 0 {
-		// Use the size of the invisible part as scroll boundary.
-		min = -l.Position.Offset
-		if min > 0 {
-			min = 0
-		}
-	}
-	if l.Position.First+l.Position.Count == l.len {
-		max = -l.Position.OffsetLast
-		if max < 0 {
-			max = 0
-		}
-	}
-	scrollRange := image.Rectangle{
-		Min: l.Axis.Convert(image.Pt(min, 0)),
-		Max: l.Axis.Convert(image.Pt(max, 0)),
-	}
-	l.scroll.Add(ops, scrollRange)
+	l.scroll.Add(ops)
 
 	call.Add(ops)
 	return Dimensions{Size: dims}
+}
+
+// ScrollBy scrolls the list by a relative amount of items.
+//
+// Fractional scrolling may be inaccurate for items of differing
+// dimensions. This includes scrolling by integer amounts if the current
+// l.Position.Offset is non-zero.
+func (l *List) ScrollBy(num float32) {
+	// Split number of items into integer and fractional parts
+	i, f := math.Modf(float64(num))
+
+	// Scroll by integer amount of items
+	l.Position.First += int(i)
+
+	// Adjust Offset to account for fractional items. If Offset gets so large that it amounts to an entire item, then
+	// the layout code will handle that for us and adjust First and Offset accordingly.
+	itemHeight := float64(l.Position.Length) / float64(l.len)
+	l.Position.Offset += int(math.Round(itemHeight * f))
+
+	// First and Offset can go out of bounds, but the layout code knows how to handle that.
+
+	// Ensure that the list pays attention to the Offset field when the scrollbar drag
+	// is started while the bar is at the end of the list. Without this, the scrollbar
+	// cannot be dragged away from the end.
+	l.Position.BeforeEnd = true
+}
+
+// ScrollTo scrolls to the specified item.
+func (l *List) ScrollTo(n int) {
+	l.Position.First = n
+	l.Position.Offset = 0
+	l.Position.BeforeEnd = true
 }

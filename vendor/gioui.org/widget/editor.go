@@ -3,41 +3,53 @@
 package widget
 
 import (
-	"bytes"
-	"fmt"
+	"bufio"
 	"image"
 	"io"
 	"math"
-	"sort"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"gioui.org/f32"
+	"gioui.org/font"
 	"gioui.org/gesture"
 	"gioui.org/io/clipboard"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
+	"gioui.org/io/semantic"
 	"gioui.org/io/system"
+	"gioui.org/io/transfer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
-	"gioui.org/op/paint"
 	"gioui.org/text"
 	"gioui.org/unit"
-
-	"golang.org/x/image/math/fixed"
 )
 
 // Editor implements an editable and scrollable text area.
 type Editor struct {
+	// text manages the text buffer and provides shaping and cursor positioning
+	// services.
+	text textView
+	// Alignment controls the alignment of text within the editor.
 	Alignment text.Alignment
+	// LineHeight determines the gap between baselines of text. If zero, a sensible
+	// default will be used.
+	LineHeight unit.Sp
+	// LineHeightScale is multiplied by LineHeight to determine the final gap
+	// between baselines. If zero, a sensible default will be used.
+	LineHeightScale float32
 	// SingleLine force the text to stay on a single line.
 	// SingleLine also sets the scrolling direction to
 	// horizontal.
 	SingleLine bool
+	// ReadOnly controls whether the contents of the editor can be altered by
+	// user interaction. If set to true, the editor will allow selecting text
+	// and copying it interactively, but not modifying it.
+	ReadOnly bool
 	// Submit enabled translation of carriage return keys to SubmitEvents.
 	// If not enabled, carriage returns are inserted as newlines in the text.
 	Submit bool
@@ -52,29 +64,14 @@ type Editor struct {
 	// Filter is the list of characters allowed in the Editor. If Filter is empty,
 	// all characters are allowed.
 	Filter string
+	// WrapPolicy configures how displayed text will be broken into lines.
+	WrapPolicy text.WrapPolicy
 
-	eventKey     int
-	font         text.Font
-	shaper       text.Shaper
-	textSize     fixed.Int26_6
-	blinkStart   time.Time
-	focused      bool
-	rr           editBuffer
-	maskReader   maskReader
-	lastMask     rune
-	maxWidth     int
-	viewSize     image.Point
-	valid        bool
-	lines        []text.Line
-	dims         layout.Dimensions
-	requestFocus bool
-
-	// index tracks combined caret positions at regularly
-	// spaced intervals to speed up caret seeking.
-	index []combinedPos
-
-	// offIndex is an index of rune index to byte offsets.
-	offIndex []offEntry
+	buffer *editBuffer
+	// scratch is a byte buffer that is reused to efficiently read portions of text
+	// from the textView.
+	scratch    []byte
+	blinkStart time.Time
 
 	// ime tracks the state relevant to input methods.
 	ime struct {
@@ -82,33 +79,13 @@ type Editor struct {
 		scratch []byte
 	}
 
-	caret struct {
-		on     bool
-		scroll bool
-		// xoff is the offset to the current position when moving between lines.
-		xoff fixed.Int26_6
-		// start is the current caret position in runes, and also the start position of
-		// selected text. end is the end position of selected text. If start
-		// == end, then there's no selection. Note that it's possible (and
-		// common) that the caret (start) is after the end, e.g. after
-		// Shift-DownArrow.
-		start int
-		end   int
-	}
-
-	dragging  bool
-	dragger   gesture.Drag
-	scroller  gesture.Scroll
-	scrollOff image.Point
+	dragging    bool
+	dragger     gesture.Drag
+	scroller    gesture.Scroll
+	scrollCaret bool
+	showCaret   bool
 
 	clicker gesture.Click
-
-	// events is the list of events not yet processed.
-	events []EditorEvent
-	// prevEvents is the number of events from the previous frame.
-	prevEvents int
-
-	locale system.Locale
 
 	// history contains undo history.
 	history []modification
@@ -116,6 +93,8 @@ type Editor struct {
 	// is only not len(history) immediately after undo operations occur. It is framed as the "next" value
 	// to make the zero value consistent.
 	nextHistoryIdx int
+
+	pending []EditorEvent
 }
 
 type offEntry struct {
@@ -138,24 +117,8 @@ type maskReader struct {
 	maskBuf [utf8.UTFMax]byte
 	// mask is the utf-8 encoded mask rune.
 	mask []byte
-}
-
-// combinedPos is a point in the editor.
-type combinedPos struct {
-	// runes is the offset in runes.
-	runes int
-
-	// lineCol.Y = line (offset into Editor.lines), and X = col (rune offset into
-	// Editor.lines[Y])
-	lineCol screenPos
-
-	// Pixel coordinates
-	x fixed.Int26_6
-	y int
-
-	// clusterIndex is the glyph cluster index that contains the rune referred
-	// to by the y coordinate.
-	clusterIndex int
+	// overflow contains excess mask bytes left over after the last Read call.
+	overflow []byte
 }
 
 type selectionAction int
@@ -165,26 +128,37 @@ const (
 	selectionClear
 )
 
-func (m *maskReader) Reset(r io.RuneReader, mr rune) {
-	m.rr = r
+func (m *maskReader) Reset(r io.Reader, mr rune) {
+	m.rr = bufio.NewReader(r)
 	n := utf8.EncodeRune(m.maskBuf[:], mr)
 	m.mask = m.maskBuf[:n]
 }
 
-// ReadRune reads a rune from the underlying reader and replaces every
+// Read reads from the underlying reader and replaces every
 // rune with the mask rune.
-func (m *maskReader) ReadRune() (r rune, n int, err error) {
-	r, _, err = m.rr.ReadRune()
-	if err != nil {
-		return
+func (m *maskReader) Read(b []byte) (n int, err error) {
+	for len(b) > 0 {
+		var replacement []byte
+		if len(m.overflow) > 0 {
+			replacement = m.overflow
+		} else {
+			var r rune
+			r, _, err = m.rr.ReadRune()
+			if err != nil {
+				break
+			}
+			if r == '\n' {
+				replacement = []byte{'\n'}
+			} else {
+				replacement = m.mask
+			}
+		}
+		nn := copy(b, replacement)
+		m.overflow = replacement[nn:]
+		n += nn
+		b = b[nn:]
 	}
-	if r != '\n' {
-		r, _ = utf8.DecodeRune(m.mask)
-		n = len(m.mask)
-	} else {
-		n = 1
-	}
-	return
+	return n, err
 }
 
 type EditorEvent interface {
@@ -213,43 +187,38 @@ const (
 	maxBlinkDuration = 10 * time.Second
 )
 
-// Events returns available editor events.
-func (e *Editor) Events() []EditorEvent {
-	events := e.events
-	e.events = nil
-	e.prevEvents = 0
-	return events
+func (e *Editor) processEvents(gtx layout.Context) (ev EditorEvent, ok bool) {
+	if len(e.pending) > 0 {
+		out := e.pending[0]
+		e.pending = e.pending[:copy(e.pending, e.pending[1:])]
+		return out, true
+	}
+	selStart, selEnd := e.Selection()
+	defer func() {
+		afterSelStart, afterSelEnd := e.Selection()
+		if selStart != afterSelStart || selEnd != afterSelEnd {
+			if ok {
+				e.pending = append(e.pending, SelectEvent{})
+			} else {
+				ev = SelectEvent{}
+				ok = true
+			}
+		}
+	}()
+
+	ev, ok = e.processPointer(gtx)
+	if ok {
+		return ev, ok
+	}
+	ev, ok = e.processKey(gtx)
+	if ok {
+		return ev, ok
+	}
+	return nil, false
 }
 
-func (e *Editor) processEvents(gtx layout.Context) {
-	// Flush events from before the previous Layout.
-	n := copy(e.events, e.events[e.prevEvents:])
-	e.events = e.events[:n]
-	e.prevEvents = n
-
-	if e.shaper == nil {
-		// Can't process events without a shaper.
-		return
-	}
-	oldStart, oldLen := min(e.caret.start, e.caret.end), e.SelectionLen()
-	e.processPointer(gtx)
-	e.processKey(gtx)
-	// Queue a SelectEvent if the selection changed, including if it went away.
-	if newStart, newLen := min(e.caret.start, e.caret.end), e.SelectionLen(); oldStart != newStart || oldLen != newLen {
-		e.events = append(e.events, SelectEvent{})
-	}
-}
-
-func (e *Editor) makeValid() {
-	if e.valid {
-		return
-	}
-	e.lines, e.dims = e.layoutText(e.shaper)
-	e.valid = true
-}
-
-func (e *Editor) processPointer(gtx layout.Context) {
-	sbounds := e.scrollBounds()
+func (e *Editor) processPointer(gtx layout.Context) (EditorEvent, bool) {
+	sbounds := e.text.ScrollBounds()
 	var smin, smax int
 	var axis gesture.Axis
 	if e.SingleLine {
@@ -259,121 +228,204 @@ func (e *Editor) processPointer(gtx layout.Context) {
 		axis = gesture.Vertical
 		smin, smax = sbounds.Min.Y, sbounds.Max.Y
 	}
-	sdist := e.scroller.Scroll(gtx.Metric, gtx, gtx.Now, axis)
+	var scrollX, scrollY pointer.ScrollRange
+	textDims := e.text.FullDimensions()
+	visibleDims := e.text.Dimensions()
+	if e.SingleLine {
+		scrollOffX := e.text.ScrollOff().X
+		scrollX.Min = min(-scrollOffX, 0)
+		scrollX.Max = max(0, textDims.Size.X-(scrollOffX+visibleDims.Size.X))
+	} else {
+		scrollOffY := e.text.ScrollOff().Y
+		scrollY.Min = -scrollOffY
+		scrollY.Max = max(0, textDims.Size.Y-(scrollOffY+visibleDims.Size.Y))
+	}
+	sdist := e.scroller.Update(gtx.Metric, gtx.Source, gtx.Now, axis, scrollX, scrollY)
 	var soff int
 	if e.SingleLine {
-		e.scrollRel(sdist, 0)
-		soff = e.scrollOff.X
+		e.text.ScrollRel(sdist, 0)
+		soff = e.text.ScrollOff().X
 	} else {
-		e.scrollRel(0, sdist)
-		soff = e.scrollOff.Y
+		e.text.ScrollRel(0, sdist)
+		soff = e.text.ScrollOff().Y
 	}
-	for _, evt := range e.clickDragEvents(gtx) {
-		switch evt := evt.(type) {
-		case gesture.ClickEvent:
-			switch {
-			case evt.Type == gesture.TypePress && evt.Source == pointer.Mouse,
-				evt.Type == gesture.TypeClick && evt.Source != pointer.Mouse:
-				prevCaretPos := e.caret.start
-				e.blinkStart = gtx.Now
-				e.moveCoord(image.Point{
-					X: int(math.Round(float64(evt.Position.X))),
-					Y: int(math.Round(float64(evt.Position.Y))),
-				})
-				e.requestFocus = true
-				if e.scroller.State() != gesture.StateFlinging {
-					e.caret.scroll = true
-				}
-
-				if evt.Modifiers == key.ModShift {
-					// If they clicked closer to the end, then change the end to
-					// where the caret used to be (effectively swapping start & end).
-					if abs(e.caret.end-e.caret.start) < abs(e.caret.start-prevCaretPos) {
-						e.caret.end = prevCaretPos
-					}
-				} else {
-					e.ClearSelection()
-				}
-				e.dragging = true
-
-				// Process a double-click.
-				if evt.NumClicks == 2 {
-					e.moveWord(-1, selectionClear)
-					e.moveWord(1, selectionExtend)
-					e.dragging = false
-				}
-			}
-		case pointer.Event:
-			release := false
-			switch {
-			case evt.Type == pointer.Release && evt.Source == pointer.Mouse:
-				release = true
-				fallthrough
-			case evt.Type == pointer.Drag && evt.Source == pointer.Mouse:
-				if e.dragging {
-					e.blinkStart = gtx.Now
-					e.moveCoord(image.Point{
-						X: int(math.Round(float64(evt.Position.X))),
-						Y: int(math.Round(float64(evt.Position.Y))),
-					})
-					e.caret.scroll = true
-
-					if release {
-						e.dragging = false
-					}
-				}
-			}
+	for {
+		evt, ok := e.clicker.Update(gtx.Source)
+		if !ok {
+			break
+		}
+		ev, ok := e.processPointerEvent(gtx, evt)
+		if ok {
+			return ev, ok
+		}
+	}
+	for {
+		evt, ok := e.dragger.Update(gtx.Metric, gtx.Source, gesture.Both)
+		if !ok {
+			break
+		}
+		ev, ok := e.processPointerEvent(gtx, evt)
+		if ok {
+			return ev, ok
 		}
 	}
 
 	if (sdist > 0 && soff >= smax) || (sdist < 0 && soff <= smin) {
 		e.scroller.Stop()
 	}
+	return nil, false
 }
 
-func (e *Editor) clickDragEvents(gtx layout.Context) []event.Event {
-	var combinedEvents []event.Event
-	for _, evt := range e.clicker.Events(gtx) {
-		combinedEvents = append(combinedEvents, evt)
+func (e *Editor) processPointerEvent(gtx layout.Context, ev event.Event) (EditorEvent, bool) {
+	switch evt := ev.(type) {
+	case gesture.ClickEvent:
+		switch {
+		case evt.Kind == gesture.KindPress && evt.Source == pointer.Mouse,
+			evt.Kind == gesture.KindClick && evt.Source != pointer.Mouse:
+			prevCaretPos, _ := e.text.Selection()
+			e.blinkStart = gtx.Now
+			e.text.MoveCoord(image.Point{
+				X: int(math.Round(float64(evt.Position.X))),
+				Y: int(math.Round(float64(evt.Position.Y))),
+			})
+			gtx.Execute(key.FocusCmd{Tag: e})
+			if !e.ReadOnly {
+				gtx.Execute(key.SoftKeyboardCmd{Show: true})
+			}
+			if e.scroller.State() != gesture.StateFlinging {
+				e.scrollCaret = true
+			}
+
+			if evt.Modifiers == key.ModShift {
+				start, end := e.text.Selection()
+				// If they clicked closer to the end, then change the end to
+				// where the caret used to be (effectively swapping start & end).
+				if abs(end-start) < abs(start-prevCaretPos) {
+					e.text.SetCaret(start, prevCaretPos)
+				}
+			} else {
+				e.text.ClearSelection()
+			}
+			e.dragging = true
+
+			// Process multi-clicks.
+			switch {
+			case evt.NumClicks == 2:
+				e.text.MoveWord(-1, selectionClear)
+				e.text.MoveWord(1, selectionExtend)
+				e.dragging = false
+			case evt.NumClicks >= 3:
+				e.text.MoveLineStart(selectionClear)
+				e.text.MoveLineEnd(selectionExtend)
+				e.dragging = false
+			}
+		}
+	case pointer.Event:
+		release := false
+		switch {
+		case evt.Kind == pointer.Release && evt.Source == pointer.Mouse:
+			release = true
+			fallthrough
+		case evt.Kind == pointer.Drag && evt.Source == pointer.Mouse:
+			if e.dragging {
+				e.blinkStart = gtx.Now
+				e.text.MoveCoord(image.Point{
+					X: int(math.Round(float64(evt.Position.X))),
+					Y: int(math.Round(float64(evt.Position.Y))),
+				})
+				e.scrollCaret = true
+
+				if release {
+					e.dragging = false
+				}
+			}
+		}
 	}
-	for _, evt := range e.dragger.Events(gtx.Metric, gtx, gesture.Both) {
-		combinedEvents = append(combinedEvents, evt)
-	}
-	return combinedEvents
+	return nil, false
 }
 
-func (e *Editor) processKey(gtx layout.Context) {
-	if e.rr.Changed() {
-		e.events = append(e.events, ChangeEvent{})
+func condFilter(pred bool, f key.Filter) event.Filter {
+	if pred {
+		return f
+	} else {
+		return nil
+	}
+}
+
+func (e *Editor) processKey(gtx layout.Context) (EditorEvent, bool) {
+	if e.text.Changed() {
+		return ChangeEvent{}, true
+	}
+	caret, _ := e.text.Selection()
+	atBeginning := caret == 0
+	atEnd := caret == e.text.Len()
+	if gtx.Locale.Direction.Progression() != system.FromOrigin {
+		atEnd, atBeginning = atBeginning, atEnd
+	}
+	filters := []event.Filter{
+		key.FocusFilter{Target: e},
+		transfer.TargetFilter{Target: e, Type: "application/text"},
+		key.Filter{Focus: e, Name: key.NameEnter, Optional: key.ModShift},
+		key.Filter{Focus: e, Name: key.NameReturn, Optional: key.ModShift},
+
+		key.Filter{Focus: e, Name: "Z", Required: key.ModShortcut, Optional: key.ModShift},
+		key.Filter{Focus: e, Name: "C", Required: key.ModShortcut},
+		key.Filter{Focus: e, Name: "V", Required: key.ModShortcut},
+		key.Filter{Focus: e, Name: "X", Required: key.ModShortcut},
+		key.Filter{Focus: e, Name: "A", Required: key.ModShortcut},
+
+		key.Filter{Focus: e, Name: key.NameDeleteBackward, Optional: key.ModShortcutAlt | key.ModShift},
+		key.Filter{Focus: e, Name: key.NameDeleteForward, Optional: key.ModShortcutAlt | key.ModShift},
+
+		key.Filter{Focus: e, Name: key.NameHome, Optional: key.ModShortcut | key.ModShift},
+		key.Filter{Focus: e, Name: key.NameEnd, Optional: key.ModShortcut | key.ModShift},
+		key.Filter{Focus: e, Name: key.NamePageDown, Optional: key.ModShift},
+		key.Filter{Focus: e, Name: key.NamePageUp, Optional: key.ModShift},
+		condFilter(!atBeginning, key.Filter{Focus: e, Name: key.NameLeftArrow, Optional: key.ModShortcutAlt | key.ModShift}),
+		condFilter(!atBeginning, key.Filter{Focus: e, Name: key.NameUpArrow, Optional: key.ModShortcutAlt | key.ModShift}),
+		condFilter(!atEnd, key.Filter{Focus: e, Name: key.NameRightArrow, Optional: key.ModShortcutAlt | key.ModShift}),
+		condFilter(!atEnd, key.Filter{Focus: e, Name: key.NameDownArrow, Optional: key.ModShortcutAlt | key.ModShift}),
 	}
 	// adjust keeps track of runes dropped because of MaxLen.
 	var adjust int
-	for _, ke := range gtx.Events(&e.eventKey) {
+	for {
+		ke, ok := gtx.Event(filters...)
+		if !ok {
+			break
+		}
 		e.blinkStart = gtx.Now
 		switch ke := ke.(type) {
 		case key.FocusEvent:
-			e.focused = ke.Focus
 			// Reset IME state.
 			e.ime.imeState = imeState{}
+			if ke.Focus && !e.ReadOnly {
+				gtx.Execute(key.SoftKeyboardCmd{Show: true})
+			}
 		case key.Event:
-			if !e.focused || ke.State != key.Press {
+			if !gtx.Focused(e) || ke.State != key.Press {
 				break
 			}
-			if e.Submit && (ke.Name == key.NameReturn || ke.Name == key.NameEnter) {
+			if !e.ReadOnly && e.Submit && (ke.Name == key.NameReturn || ke.Name == key.NameEnter) {
 				if !ke.Modifiers.Contain(key.ModShift) {
-					e.events = append(e.events, SubmitEvent{
-						Text: e.Text(),
-					})
-					continue
+					e.scratch = e.text.Text(e.scratch)
+					return SubmitEvent{
+						Text: string(e.scratch),
+					}, true
 				}
 			}
-			e.command(gtx, ke)
-			e.caret.scroll = true
+			e.scrollCaret = true
 			e.scroller.Stop()
+			ev, ok := e.command(gtx, ke)
+			if ok {
+				return ev, ok
+			}
 		case key.SnippetEvent:
 			e.updateSnippet(gtx, ke.Start, ke.End)
 		case key.EditEvent:
-			e.caret.scroll = true
+			if e.ReadOnly {
+				break
+			}
+			e.scrollCaret = true
 			e.scroller.Stop()
 			s := ke.Text
 			moves := 0
@@ -390,49 +442,47 @@ func (e *Editor) processKey(gtx layout.Context) {
 			}
 			moves += e.replace(ke.Range.Start, ke.Range.End, s, true)
 			adjust += utf8.RuneCountInString(ke.Text) - moves
-			e.caret.xoff = 0
+			// Reset caret xoff.
+			e.text.MoveCaret(0, 0)
 			if submit {
-				if e.rr.Changed() {
-					e.events = append(e.events, ChangeEvent{})
+				e.scratch = e.text.Text(e.scratch)
+				submitEvent := SubmitEvent{
+					Text: string(e.scratch),
 				}
-				e.events = append(e.events, SubmitEvent{
-					Text: e.Text(),
-				})
+				if e.text.Changed() {
+					e.pending = append(e.pending, submitEvent)
+					return ChangeEvent{}, true
+				}
+				return submitEvent, true
 			}
 		// Complete a paste event, initiated by Shortcut-V in Editor.command().
-		case clipboard.Event:
-			e.caret.scroll = true
+		case transfer.DataEvent:
+			e.scrollCaret = true
 			e.scroller.Stop()
-			e.append(ke.Text)
+			content, err := io.ReadAll(ke.Open())
+			if err == nil {
+				if e.Insert(string(content)) != 0 {
+					return ChangeEvent{}, true
+				}
+			}
 		case key.SelectionEvent:
-			e.caret.scroll = true
+			e.scrollCaret = true
 			e.scroller.Stop()
 			ke.Start -= adjust
 			ke.End -= adjust
 			adjust = 0
-			e.caret.start = e.closestPosition(combinedPos{runes: ke.Start}).runes
-			e.caret.end = e.closestPosition(combinedPos{runes: ke.End}).runes
+			e.text.SetCaret(ke.Start, ke.End)
 		}
 	}
-	if e.rr.Changed() {
-		e.events = append(e.events, ChangeEvent{})
+	if e.text.Changed() {
+		return ChangeEvent{}, true
 	}
+	return nil, false
 }
 
-func (e *Editor) moveLines(distance int, selAct selectionAction) {
-	caretStart := e.closestPosition(combinedPos{runes: e.caret.start})
-	x := caretStart.x + e.caret.xoff
-	// Seek to line.
-	pos := e.closestPosition(combinedPos{lineCol: screenPos{Y: caretStart.lineCol.Y + distance}})
-	pos = e.closestPosition(combinedPos{x: x, y: pos.y})
-	e.caret.start = pos.runes
-	e.caret.xoff = x - pos.x
-	e.updateSelection(selAct)
-}
-
-func (e *Editor) command(gtx layout.Context, k key.Event) {
+func (e *Editor) command(gtx layout.Context, k key.Event) (EditorEvent, bool) {
 	direction := 1
-	if e.locale.Direction.Progression() == system.TowardOrigin {
+	if gtx.Locale.Direction.Progression() == system.TowardOrigin {
 		direction = -1
 	}
 	moveByWord := k.Modifiers.Contain(key.ModShortcutAlt)
@@ -440,185 +490,196 @@ func (e *Editor) command(gtx layout.Context, k key.Event) {
 	if k.Modifiers.Contain(key.ModShift) {
 		selAct = selectionExtend
 	}
+	if k.Modifiers.Contain(key.ModShortcut) {
+		switch k.Name {
+		// Initiate a paste operation, by requesting the clipboard contents; other
+		// half is in Editor.processKey() under clipboard.Event.
+		case "V":
+			if !e.ReadOnly {
+				gtx.Execute(clipboard.ReadCmd{Tag: e})
+			}
+		// Copy or Cut selection -- ignored if nothing selected.
+		case "C", "X":
+			e.scratch = e.text.SelectedText(e.scratch)
+			if text := string(e.scratch); text != "" {
+				gtx.Execute(clipboard.WriteCmd{Type: "application/text", Data: io.NopCloser(strings.NewReader(text))})
+				if k.Name == "X" && !e.ReadOnly {
+					if e.Delete(1) != 0 {
+						return ChangeEvent{}, true
+					}
+				}
+			}
+		// Select all
+		case "A":
+			e.text.SetCaret(0, e.text.Len())
+		case "Z":
+			if !e.ReadOnly {
+				if k.Modifiers.Contain(key.ModShift) {
+					if ev, ok := e.redo(); ok {
+						return ev, ok
+					}
+				} else {
+					if ev, ok := e.undo(); ok {
+						return ev, ok
+					}
+				}
+			}
+		case key.NameHome:
+			e.text.MoveTextStart(selAct)
+		case key.NameEnd:
+			e.text.MoveTextEnd(selAct)
+		}
+		return nil, false
+	}
 	switch k.Name {
 	case key.NameReturn, key.NameEnter:
-		e.append("\n")
+		if !e.ReadOnly {
+			if e.Insert("\n") != 0 {
+				return ChangeEvent{}, true
+			}
+		}
 	case key.NameDeleteBackward:
-		if moveByWord {
-			e.deleteWord(-1)
-		} else {
-			e.Delete(-1)
+		if !e.ReadOnly {
+			if moveByWord {
+				if e.deleteWord(-1) != 0 {
+					return ChangeEvent{}, true
+				}
+			} else {
+				if e.Delete(-1) != 0 {
+					return ChangeEvent{}, true
+				}
+			}
 		}
 	case key.NameDeleteForward:
-		if moveByWord {
-			e.deleteWord(1)
-		} else {
-			e.Delete(1)
+		if !e.ReadOnly {
+			if moveByWord {
+				if e.deleteWord(1) != 0 {
+					return ChangeEvent{}, true
+				}
+			} else {
+				if e.Delete(1) != 0 {
+					return ChangeEvent{}, true
+				}
+			}
 		}
 	case key.NameUpArrow:
-		e.moveLines(-1, selAct)
+		e.text.MoveLines(-1, selAct)
 	case key.NameDownArrow:
-		e.moveLines(+1, selAct)
+		e.text.MoveLines(+1, selAct)
 	case key.NameLeftArrow:
 		if moveByWord {
-			e.moveWord(-1*direction, selAct)
+			e.text.MoveWord(-1*direction, selAct)
 		} else {
 			if selAct == selectionClear {
-				e.ClearSelection()
+				e.text.ClearSelection()
 			}
-			e.MoveCaret(-1*direction, -1*direction*int(selAct))
+			e.text.MoveCaret(-1*direction, -1*direction*int(selAct))
 		}
 	case key.NameRightArrow:
 		if moveByWord {
-			e.moveWord(1*direction, selAct)
+			e.text.MoveWord(1*direction, selAct)
 		} else {
 			if selAct == selectionClear {
-				e.ClearSelection()
+				e.text.ClearSelection()
 			}
-			e.MoveCaret(1*direction, int(selAct)*direction)
+			e.text.MoveCaret(1*direction, int(selAct)*direction)
 		}
 	case key.NamePageUp:
-		e.movePages(-1, selAct)
+		e.text.MovePages(-1, selAct)
 	case key.NamePageDown:
-		e.movePages(+1, selAct)
+		e.text.MovePages(+1, selAct)
 	case key.NameHome:
-		e.moveStart(selAct)
+		e.text.MoveLineStart(selAct)
 	case key.NameEnd:
-		e.moveEnd(selAct)
-	// Initiate a paste operation, by requesting the clipboard contents; other
-	// half is in Editor.processKey() under clipboard.Event.
-	case "V":
-		clipboard.ReadOp{Tag: &e.eventKey}.Add(gtx.Ops)
-	// Copy or Cut selection -- ignored if nothing selected.
-	case "C", "X":
-		if text := e.SelectedText(); text != "" {
-			clipboard.WriteOp{Text: text}.Add(gtx.Ops)
-			if k.Name == "X" {
-				e.Delete(1)
-			}
-		}
-	// Select all
-	case "A":
-		e.caret.end = 0
-		e.caret.start = e.Len()
-	case "Z":
-		if k.Modifiers.Contain(key.ModShift) {
-			e.redo()
-		} else {
-			e.undo()
-		}
+		e.text.MoveLineEnd(selAct)
 	}
+	return nil, false
 }
 
-// Focus requests the input focus for the Editor.
-func (e *Editor) Focus() {
-	e.requestFocus = true
+// initBuffer should be invoked first in every exported function that accesses
+// text state. It ensures that the underlying text widget is both ready to use
+// and has its fields synced with the editor.
+func (e *Editor) initBuffer() {
+	if e.buffer == nil {
+		e.buffer = new(editBuffer)
+		e.text.SetSource(e.buffer)
+	}
+	e.text.Alignment = e.Alignment
+	e.text.LineHeight = e.LineHeight
+	e.text.LineHeightScale = e.LineHeightScale
+	e.text.SingleLine = e.SingleLine
+	e.text.Mask = e.Mask
+	e.text.WrapPolicy = e.WrapPolicy
+	e.text.DisableSpaceTrim = true
 }
 
-// Focused returns whether the editor is focused or not.
-func (e *Editor) Focused() bool {
-	return e.focused
+// Update the state of the editor in response to input events. Update consumes editor
+// input events until there are no remaining events or an editor event is generated.
+// To fully update the state of the editor, callers should call Update until it returns
+// false.
+func (e *Editor) Update(gtx layout.Context) (EditorEvent, bool) {
+	e.initBuffer()
+	event, ok := e.processEvents(gtx)
+	// Notify IME of selection if it changed.
+	newSel := e.ime.selection
+	start, end := e.text.Selection()
+	newSel.rng = key.Range{
+		Start: start,
+		End:   end,
+	}
+	caretPos, carAsc, carDesc := e.text.CaretInfo()
+	newSel.caret = key.Caret{
+		Pos:     layout.FPt(caretPos),
+		Ascent:  float32(carAsc),
+		Descent: float32(carDesc),
+	}
+	if newSel != e.ime.selection {
+		e.ime.selection = newSel
+		gtx.Execute(key.SelectionCmd{Tag: e, Range: newSel.rng, Caret: newSel.caret})
+	}
+
+	e.updateSnippet(gtx, e.ime.start, e.ime.end)
+	return event, ok
 }
 
-// calculateViewSize determines the size of the current visible content,
-// ensuring that even if there is no text content, some space is reserved
-// for the caret.
-func (e *Editor) calculateViewSize(gtx layout.Context) image.Point {
-	base := e.dims.Size
-	if caretWidth := e.caretWidth(gtx); base.X < caretWidth {
-		base.X = caretWidth
-	}
-	return gtx.Constraints.Constrain(base)
-}
-
-// Layout lays out the editor. If content is not nil, it is laid out on top.
-func (e *Editor) Layout(gtx layout.Context, sh text.Shaper, font text.Font, size unit.Sp, content layout.Widget) layout.Dimensions {
-	if e.locale != gtx.Locale {
-		e.locale = gtx.Locale
-		e.invalidate()
-	}
-	textSize := fixed.I(gtx.Sp(size))
-	if e.font != font || e.textSize != textSize {
-		e.invalidate()
-		e.font = font
-		e.textSize = textSize
-	}
-	maxWidth := gtx.Constraints.Max.X
-	if e.SingleLine {
-		maxWidth = inf
-	}
-	if maxWidth != e.maxWidth {
-		e.maxWidth = maxWidth
-		e.invalidate()
-	}
-	if sh != e.shaper {
-		e.shaper = sh
-		e.invalidate()
-	}
-	if e.Mask != e.lastMask {
-		e.lastMask = e.Mask
-		e.invalidate()
-	}
-
-	e.makeValid()
-	e.processEvents(gtx)
-	e.makeValid()
-
-	if viewSize := e.calculateViewSize(gtx); viewSize != e.viewSize {
-		e.viewSize = viewSize
-		e.invalidate()
-	}
-	e.makeValid()
-
-	dims := e.layout(gtx, content)
-
-	if e.focused {
-		// Notify IME of selection if it changed.
-		newSel := e.ime.selection
-		newSel.rng = key.Range{
-			Start: e.caret.start,
-			End:   e.caret.end,
+// Layout lays out the editor using the provided textMaterial as the paint material
+// for the text glyphs+caret and the selectMaterial as the paint material for the
+// selection rectangle.
+func (e *Editor) Layout(gtx layout.Context, lt *text.Shaper, font font.Font, size unit.Sp, textMaterial, selectMaterial op.CallOp) layout.Dimensions {
+	for {
+		_, ok := e.Update(gtx)
+		if !ok {
+			break
 		}
-		caretPos, carAsc, carDesc := e.caretInfo()
-		newSel.caret = key.Caret{
-			Pos:     layout.FPt(caretPos),
-			Ascent:  float32(carAsc),
-			Descent: float32(carDesc),
-		}
-		if newSel != e.ime.selection {
-			e.ime.selection = newSel
-			key.SelectionOp{
-				Tag:   &e.eventKey,
-				Range: newSel.rng,
-				Caret: newSel.caret,
-			}.Add(gtx.Ops)
-		}
-
-		e.updateSnippet(gtx, e.ime.start, e.ime.end)
 	}
 
-	return dims
+	e.text.Layout(gtx, lt, font, size)
+	return e.layout(gtx, textMaterial, selectMaterial)
 }
 
-// updateSnippet adds a key.SnippetOp if the snippet content or position
+// updateSnippet queues a key.SnippetCmd if the snippet content or position
 // have changed. off and len are in runes.
 func (e *Editor) updateSnippet(gtx layout.Context, start, end int) {
 	if start > end {
 		start, end = end, start
 	}
-	imeStart := e.closestPosition(combinedPos{runes: start})
-	imeEnd := e.closestPosition(combinedPos{runes: end})
-	e.ime.start = imeStart.runes
-	e.ime.end = imeEnd.runes
-	startOff := e.runeOffset(imeStart.runes)
-	endOff := e.runeOffset(imeEnd.runes)
-	e.rr.Seek(int64(startOff), io.SeekStart)
+	length := e.text.Len()
+	if start > length {
+		start = length
+	}
+	if end > length {
+		end = length
+	}
+	e.ime.start = start
+	e.ime.end = end
+	startOff := e.text.ByteOffset(start)
+	endOff := e.text.ByteOffset(end)
 	n := endOff - startOff
-	if n > len(e.ime.scratch) {
+	if n > int64(len(e.ime.scratch)) {
 		e.ime.scratch = make([]byte, n)
 	}
 	scratch := e.ime.scratch[:n]
-	read, _ := e.rr.Read(scratch)
+	read, _ := e.text.ReadAt(scratch, startOff)
 	if read != len(scratch) {
 		panic("e.rr.Read truncated data")
 	}
@@ -636,576 +697,156 @@ func (e *Editor) updateSnippet(gtx layout.Context, start, end int) {
 		return
 	}
 	e.ime.snippet = newSnip
-	key.SnippetOp{
-		Tag:     &e.eventKey,
-		Snippet: newSnip,
-	}.Add(gtx.Ops)
+	gtx.Execute(key.SnippetCmd{Tag: e, Snippet: newSnip})
 }
 
-func (e *Editor) layout(gtx layout.Context, content layout.Widget) layout.Dimensions {
+func (e *Editor) layout(gtx layout.Context, textMaterial, selectMaterial op.CallOp) layout.Dimensions {
 	// Adjust scrolling for new viewport and layout.
-	e.scrollRel(0, 0)
+	e.text.ScrollRel(0, 0)
 
-	if e.caret.scroll {
-		e.caret.scroll = false
-		e.scrollToCaret()
+	if e.scrollCaret {
+		e.scrollCaret = false
+		e.text.ScrollToCaret()
 	}
+	visibleDims := e.text.Dimensions()
 
-	defer clip.Rect(image.Rectangle{Max: e.viewSize}).Push(gtx.Ops).Pop()
+	defer clip.Rect(image.Rectangle{Max: visibleDims.Size}).Push(gtx.Ops).Pop()
 	pointer.CursorText.Add(gtx.Ops)
-	const keyFilterNoLeftUp = "(ShortAlt)-(Shift)-[→,↓]|(Shift)-[⏎,⌤]|(ShortAlt)-(Shift)-[⌫,⌦]|(Shift)-[⇞,⇟,⇱,⇲]|Short-[C,V,X,A]|Short-(Shift)-Z"
-	const keyFilterNoRightDown = "(ShortAlt)-(Shift)-[←,↑]|(Shift)-[⏎,⌤]|(ShortAlt)-(Shift)-[⌫,⌦]|(Shift)-[⇞,⇟,⇱,⇲]|Short-[C,V,X,A]|Short-(Shift)-Z"
-	const keyFilterNoArrows = "(Shift)-[⏎,⌤]|(ShortAlt)-(Shift)-[⌫,⌦]|(Shift)-[⇞,⇟,⇱,⇲]|Short-[C,V,X,A]|Short-(Shift)-Z"
-	const keyFilterAllArrows = "(ShortAlt)-(Shift)-[←,→,↑,↓]|(Shift)-[⏎,⌤]|(ShortAlt)-(Shift)-[⌫,⌦]|(Shift)-[⇞,⇟,⇱,⇲]|Short-[C,V,X,A]|Short-(Shift)-Z"
-	caret := e.closestPosition(combinedPos{runes: e.caret.start})
-	switch {
-	case caret.runes == 0 && caret.runes == e.Len():
-		key.InputOp{Tag: &e.eventKey, Hint: e.InputHint, Keys: keyFilterNoArrows}.Add(gtx.Ops)
-	case caret.runes == 0:
-		key.InputOp{Tag: &e.eventKey, Hint: e.InputHint, Keys: keyFilterNoLeftUp}.Add(gtx.Ops)
-	case caret.runes == e.Len():
-		key.InputOp{Tag: &e.eventKey, Hint: e.InputHint, Keys: keyFilterNoRightDown}.Add(gtx.Ops)
-	default:
-		key.InputOp{Tag: &e.eventKey, Hint: e.InputHint, Keys: keyFilterAllArrows}.Add(gtx.Ops)
-	}
-	if e.requestFocus {
-		key.FocusOp{Tag: &e.eventKey}.Add(gtx.Ops)
-		key.SoftKeyboardOp{Show: true}.Add(gtx.Ops)
-	}
-	e.requestFocus = false
+	event.Op(gtx.Ops, e)
+	key.InputHintOp{Tag: e, Hint: e.InputHint}.Add(gtx.Ops)
 
-	var scrollRange image.Rectangle
-	if e.SingleLine {
-		scrollRange.Min.X = min(-e.scrollOff.X, 0)
-		scrollRange.Max.X = max(0, e.dims.Size.X-(e.scrollOff.X+e.viewSize.X))
-	} else {
-		scrollRange.Min.Y = -e.scrollOff.Y
-		scrollRange.Max.Y = max(0, e.dims.Size.Y-(e.scrollOff.Y+e.viewSize.Y))
-	}
-	e.scroller.Add(gtx.Ops, scrollRange)
+	e.scroller.Add(gtx.Ops)
 
 	e.clicker.Add(gtx.Ops)
 	e.dragger.Add(gtx.Ops)
-	e.caret.on = false
-	if e.focused {
+	e.showCaret = false
+	if gtx.Focused(e) {
 		now := gtx.Now
 		dt := now.Sub(e.blinkStart)
 		blinking := dt < maxBlinkDuration
 		const timePerBlink = time.Second / blinksPerSecond
 		nextBlink := now.Add(timePerBlink/2 - dt%(timePerBlink/2))
 		if blinking {
-			redraw := op.InvalidateOp{At: nextBlink}
-			redraw.Add(gtx.Ops)
+			gtx.Execute(op.InvalidateCmd{At: nextBlink})
 		}
-		e.caret.on = e.focused && (!blinking || dt%timePerBlink < timePerBlink/2)
+		e.showCaret = !blinking || dt%timePerBlink < timePerBlink/2
 	}
-
-	if content != nil {
-		content(gtx)
+	semantic.Editor.Add(gtx.Ops)
+	if e.Len() > 0 {
+		e.paintSelection(gtx, selectMaterial)
+		e.paintText(gtx, textMaterial)
 	}
-	return layout.Dimensions{Size: e.viewSize, Baseline: e.dims.Baseline}
+	if gtx.Enabled() {
+		e.paintCaret(gtx, textMaterial)
+	}
+	return visibleDims
 }
 
-// PaintSelection paints the contrasting background for selected text.
-func (e *Editor) PaintSelection(gtx layout.Context) {
-	if !e.focused {
+// paintSelection paints the contrasting background for selected text using the provided
+// material to set the painting material for the selection.
+func (e *Editor) paintSelection(gtx layout.Context, material op.CallOp) {
+	e.initBuffer()
+	if !gtx.Focused(e) {
 		return
 	}
-	cl := textPadding(e.lines)
-	cl.Max = cl.Max.Add(e.viewSize)
-	defer clip.Rect(cl).Push(gtx.Ops).Pop()
-	selStart, selEnd := e.caret.start, e.caret.end
-	if selStart > selEnd {
-		selStart, selEnd = selEnd, selStart
-	}
-	caretStart := e.closestPosition(combinedPos{runes: selStart})
-	caretEnd := e.closestPosition(combinedPos{runes: selEnd})
-	scroll := image.Point{
-		X: e.scrollOff.X,
-		Y: e.scrollOff.Y,
-	}
-	cl = cl.Add(scroll)
-	pos := e.seekFirstVisibleLine(cl.Min.Y)
-	for !posIsBelow(e.lines, pos, cl.Max.Y) {
-		leftmost, rightmost := clipLine(e.lines, e.Alignment, e.viewSize.X, cl, pos)
-		lineIdx := leftmost.lineCol.Y
-		if lineIdx < caretStart.lineCol.Y {
-			// Line is before selection start; skip.
-			pos = e.closestPosition(combinedPos{lineCol: screenPos{Y: pos.lineCol.Y + 1}})
-			continue
-		}
-		if lineIdx > caretEnd.lineCol.Y {
-			// Line is after selection end; we're done.
-			return
-		}
-		line := e.lines[leftmost.lineCol.Y]
-		flip := line.Layout.Direction.Progression() == system.TowardOrigin
-		// Clamp start, end to selection.
-		if !flip {
-			if leftmost.runes < selStart {
-				leftmost = caretStart
-			}
-			if rightmost.runes > selEnd {
-				rightmost = caretEnd
-			}
-		} else {
-			if leftmost.runes > selEnd {
-				leftmost = caretEnd
-			}
-			if rightmost.runes < selStart {
-				rightmost = caretStart
-			}
-		}
-
-		dotStart := image.Pt(leftmost.x.Round(), leftmost.y)
-		dotEnd := image.Pt(rightmost.x.Round(), rightmost.y)
-		t := op.Offset(scroll.Mul(-1)).Push(gtx.Ops)
-		size := image.Rectangle{
-			Min: dotStart.Sub(image.Point{Y: line.Ascent.Ceil()}),
-			Max: dotEnd.Add(image.Point{Y: line.Descent.Ceil()}),
-		}
-		op := clip.Rect(size).Push(gtx.Ops)
-		paint.PaintOp{}.Add(gtx.Ops)
-		op.Pop()
-		t.Pop()
-
-		if pos.lineCol.Y == len(e.lines)-1 {
-			break
-		}
-		pos = e.closestPosition(combinedPos{lineCol: screenPos{Y: pos.lineCol.Y + 1}})
-	}
+	e.text.PaintSelection(gtx, material)
 }
 
-func (e *Editor) PaintText(gtx layout.Context) {
-	cl := textPadding(e.lines)
-	cl.Max = cl.Max.Add(e.viewSize)
-	defer clip.Rect(cl).Push(gtx.Ops).Pop()
-	scroll := image.Point{
-		X: e.scrollOff.X,
-		Y: e.scrollOff.Y,
-	}
-	cl = cl.Add(scroll)
-	pos := e.seekFirstVisibleLine(cl.Min.Y)
-	for !posIsBelow(e.lines, pos, cl.Max.Y) {
-		start, end := clipLine(e.lines, e.Alignment, e.viewSize.X, cl, pos)
-		line := e.lines[start.lineCol.Y]
-		off := image.Point{X: start.x.Floor(), Y: start.y}.Sub(scroll)
-		if start.lineCol.X > end.lineCol.X {
-			start, end = end, start
-		}
-		l := subLayout(line, start, end)
-
-		t := op.Offset(off).Push(gtx.Ops)
-		op := clip.Outline{Path: e.shaper.Shape(e.font, e.textSize, l)}.Op().Push(gtx.Ops)
-		paint.PaintOp{}.Add(gtx.Ops)
-		op.Pop()
-		t.Pop()
-
-		if pos.lineCol.Y == len(e.lines)-1 {
-			break
-		}
-		pos = e.closestPosition(combinedPos{lineCol: screenPos{Y: pos.lineCol.Y + 1}})
-	}
+// paintText paints the text glyphs using the provided material to set the fill of the
+// glyphs.
+func (e *Editor) paintText(gtx layout.Context, material op.CallOp) {
+	e.initBuffer()
+	e.text.PaintText(gtx, material)
 }
 
-// caretWidth returns the width occupied by the caret for the current
-// gtx.
-func (e *Editor) caretWidth(gtx layout.Context) int {
-	carWidth2 := gtx.Dp(1) / 2
-	if carWidth2 < 1 {
-		carWidth2 = 1
-	}
-	return carWidth2
-}
-
-func (e *Editor) PaintCaret(gtx layout.Context) {
-	if !e.caret.on {
+// paintCaret paints the text glyphs using the provided material to set the fill material
+// of the caret rectangle.
+func (e *Editor) paintCaret(gtx layout.Context, material op.CallOp) {
+	e.initBuffer()
+	if !e.showCaret || e.ReadOnly {
 		return
 	}
-	carWidth2 := e.caretWidth(gtx)
-	caretPos, carAsc, carDesc := e.caretInfo()
-
-	carRect := image.Rectangle{
-		Min: caretPos.Sub(image.Pt(carWidth2, carAsc)),
-		Max: caretPos.Add(image.Pt(carWidth2, carDesc)),
-	}
-	cl := textPadding(e.lines)
-	// Account for caret width to each side.
-	if cl.Max.X < carWidth2 {
-		cl.Max.X = carWidth2
-	}
-	if cl.Min.X > -carWidth2 {
-		cl.Min.X = -carWidth2
-	}
-	cl.Max = cl.Max.Add(e.viewSize)
-	carRect = cl.Intersect(carRect)
-	if !carRect.Empty() {
-		defer clip.Rect(carRect).Push(gtx.Ops).Pop()
-		paint.PaintOp{}.Add(gtx.Ops)
-	}
+	e.text.PaintCaret(gtx, material)
 }
-
-func (e *Editor) seekFirstVisibleLine(y int) combinedPos {
-	pos := e.closestPosition(combinedPos{y: y})
-	for pos.lineCol.Y > 0 {
-		prevLine := pos.lineCol.Y - 1
-		prev := e.closestPosition(combinedPos{lineCol: screenPos{Y: prevLine}})
-		if posIsAbove(e.lines, prev, y) {
-			break
-		}
-		pos = prev
-	}
-	return pos
-}
-
-func (e *Editor) caretInfo() (pos image.Point, ascent, descent int) {
-	caretStart := e.closestPosition(combinedPos{runes: e.caret.start})
-	carX := caretStart.x
-	carY := caretStart.y
-
-	ascent = -e.lines[caretStart.lineCol.Y].Bounds.Min.Y.Ceil()
-	descent = e.lines[caretStart.lineCol.Y].Bounds.Max.Y.Ceil()
-	pos = image.Point{
-		X: carX.Round(),
-		Y: carY,
-	}
-	pos = pos.Sub(e.scrollOff)
-	return
-}
-
-// TODO: copied from package math. Remove when Go 1.18 is minimum.
-const (
-	intSize = 32 << (^uint(0) >> 63) // 32 or 64
-	maxInt  = 1<<(intSize-1) - 1
-)
 
 // Len is the length of the editor contents, in runes.
 func (e *Editor) Len() int {
-	end := e.closestPosition(combinedPos{runes: maxInt})
-	return end.runes
+	e.initBuffer()
+	return e.text.Len()
 }
 
 // Text returns the contents of the editor.
 func (e *Editor) Text() string {
-	return e.rr.String()
+	e.initBuffer()
+	e.scratch = e.text.Text(e.scratch)
+	return string(e.scratch)
 }
 
-// SetText replaces the contents of the editor, clearing any selection first.
 func (e *Editor) SetText(s string) {
-	e.rr = editBuffer{}
-	e.caret.start = 0
-	e.caret.end = 0
+	e.initBuffer()
 	if e.SingleLine {
 		s = strings.ReplaceAll(s, "\n", " ")
 	}
-	e.replace(e.caret.start, e.caret.end, s, true)
-	e.caret.xoff = 0
-}
-
-func (e *Editor) scrollBounds() image.Rectangle {
-	var b image.Rectangle
-	if e.SingleLine {
-		if len(e.lines) > 0 {
-			b.Min.X = align(e.Alignment, e.locale.Direction, e.lines[0].Width, e.viewSize.X).Floor()
-			if b.Min.X > 0 {
-				b.Min.X = 0
-			}
-		}
-		b.Max.X = e.dims.Size.X + b.Min.X - e.viewSize.X
-	} else {
-		b.Max.Y = e.dims.Size.Y - e.viewSize.Y
-	}
-	return b
-}
-
-func (e *Editor) scrollRel(dx, dy int) {
-	e.scrollAbs(e.scrollOff.X+dx, e.scrollOff.Y+dy)
-}
-
-func (e *Editor) scrollAbs(x, y int) {
-	e.scrollOff.X = x
-	e.scrollOff.Y = y
-	b := e.scrollBounds()
-	if e.scrollOff.X > b.Max.X {
-		e.scrollOff.X = b.Max.X
-	}
-	if e.scrollOff.X < b.Min.X {
-		e.scrollOff.X = b.Min.X
-	}
-	if e.scrollOff.Y > b.Max.Y {
-		e.scrollOff.Y = b.Max.Y
-	}
-	if e.scrollOff.Y < b.Min.Y {
-		e.scrollOff.Y = b.Min.Y
-	}
-}
-
-func (e *Editor) moveCoord(pos image.Point) {
-	x := fixed.I(pos.X + e.scrollOff.X)
-	y := pos.Y + e.scrollOff.Y
-	e.caret.start = e.closestPosition(combinedPos{x: x, y: y}).runes
-	e.caret.xoff = 0
-}
-
-func (e *Editor) layoutText(s text.Shaper) ([]text.Line, layout.Dimensions) {
-	e.rr.Reset()
-	var r io.RuneReader = &e.rr
-	if e.Mask != 0 {
-		e.maskReader.Reset(&e.rr, e.Mask)
-		r = &e.maskReader
-	}
-	var lines []text.Line
-	if s != nil {
-		lines, _ = s.Layout(e.font, e.textSize, e.maxWidth, e.locale, r)
-		if len(lines) == 0 {
-			// The editor does not tolerate a zero-length list of lines being returned from the shaper.
-			lines = append(lines, text.Line{})
-		}
-	} else {
-		lines, _ = nullLayout(r)
-	}
-	dims := linesDimens(lines)
-	return lines, dims
+	e.replace(0, e.text.Len(), s, true)
+	// Reset xoff and move the caret to the beginning.
+	e.SetCaret(0, 0)
 }
 
 // CaretPos returns the line & column numbers of the caret.
 func (e *Editor) CaretPos() (line, col int) {
-	caret := e.closestPosition(combinedPos{runes: e.caret.start})
-	return caret.lineCol.Y, caret.lineCol.X
+	e.initBuffer()
+	return e.text.CaretPos()
 }
 
 // CaretCoords returns the coordinates of the caret, relative to the
 // editor itself.
 func (e *Editor) CaretCoords() f32.Point {
-	caret := e.closestPosition(combinedPos{runes: e.caret.start})
-	return f32.Pt(float32(caret.x)/64-float32(e.scrollOff.X), float32(caret.y-e.scrollOff.Y))
+	e.initBuffer()
+	return e.text.CaretCoords()
 }
 
-// indexPosition returns the latest position from the index no later than pos.
-func (e *Editor) indexPosition(pos combinedPos) combinedPos {
-	e.makeValid()
-	// Initialize index with first caret position.
-	if len(e.index) == 0 {
-		e.index = append(e.index, firstPos(e.lines[0], e.Alignment, e.viewSize.X))
-	}
-	i := sort.Search(len(e.index), func(i int) bool {
-		return positionGreaterOrEqual(e.lines, e.index[i], pos)
-	})
-	// Return position just before pos, which is guaranteed to be less than or equal to pos.
-	if i > 0 {
-		i--
-	}
-	return e.index[i]
-}
-
-// positionGreaterOrEqual reports whether p1 >= p2 according to the non-zero fields
-// of p2. All fields of p1 must be a consistent and valid.
-func positionGreaterOrEqual(lines []text.Line, p1, p2 combinedPos) bool {
-	l := lines[p1.lineCol.Y]
-	endCol := l.Layout.Runes.Count - 1
-	if lastLine := p1.lineCol.Y == len(lines)-1; lastLine {
-		endCol++
-	}
-	eol := p1.lineCol.X == endCol
-	switch {
-	case p2.runes != 0:
-		return p1.runes >= p2.runes
-	case p2.lineCol != (screenPos{}):
-		if p1.lineCol.Y != p2.lineCol.Y {
-			return p1.lineCol.Y > p2.lineCol.Y
-		}
-		return eol || p1.lineCol.X >= p2.lineCol.X
-	case p2.x != 0 || p2.y != 0:
-		ly := p1.y + l.Descent.Ceil()
-		prevy := p1.y - l.Ascent.Ceil()
-		switch {
-		case ly < p2.y && p1.lineCol.Y < len(lines)-1:
-			// p1 is on a line before p2.y.
-			return false
-		case prevy >= p2.y && p1.lineCol.Y > 0:
-			// p1 is on a line after p2.y.
-			return true
-		}
-		if eol {
-			return true
-		}
-
-		// Find the cluster containing the rune position described by p1
-		// in order to determine the width of a rune within it.
-		clusterIdx := clusterIndexFor(l, p1.lineCol.X, p1.clusterIndex)
-		flip := l.Layout.Direction.Progression() == system.TowardOrigin
-		adv := l.Layout.Clusters[clusterIdx].RuneWidth()
-
-		left := p1.x + adv - p2.x
-		right := p2.x - p1.x
-
-		return (!flip && left >= right) || (flip && left <= right)
-	}
-	return true
-}
-
-// clusterIndexFor returns the index of the glyph cluster containing the rune
-// at the given position within the line. As a special case, if the rune is one
-// beyond the final rune of the line, it returns the length of the line's clusters
-// slice. Otherwise, it panics if given a rune beyond the
-// dimensions of the line.
-func clusterIndexFor(line text.Line, runeIdx, startIdx int) int {
-	if runeIdx == line.Layout.Runes.Count {
-		return len(line.Layout.Clusters)
-	}
-	lineStart := line.Layout.Runes.Offset
-	for i := startIdx; i < len(line.Layout.Clusters); i++ {
-		cluster := line.Layout.Clusters[i]
-		clusterStart := cluster.Runes.Offset - lineStart
-		clusterEnd := clusterStart + cluster.Runes.Count
-		if runeIdx >= clusterStart && runeIdx < clusterEnd {
-			return i
-		}
-	}
-	panic(fmt.Errorf("requested cluster index for rune %d outside of line with %d runes", runeIdx, line.Layout.Runes.Count))
-}
-
-// closestPosition takes a position and returns its closest valid position.
-// Zero fields of pos are ignored.
-func (e *Editor) closestPosition(pos combinedPos) combinedPos {
-	closest := e.indexPosition(pos)
-	const runesPerIndexEntry = 50
-	for {
-		var done bool
-		closest, done = seekPosition(e.lines, e.Alignment, e.viewSize.X, closest, pos, runesPerIndexEntry)
-		if done {
-			return closest
-		}
-		e.index = append(e.index, closest)
-	}
-}
-
-// seekPosition seeks to the position closest to needle, starting at start and returns true.
-// If limit is non-zero, seekPosition stops seeks after limit runes and returns false.
-func seekPosition(lines []text.Line, alignment text.Alignment, width int, start, needle combinedPos, limit int) (combinedPos, bool) {
-	l := lines[start.lineCol.Y]
-	count := 0
-	// Advance next and prev until next is greater than or equal to pos.
-	for {
-		start.clusterIndex = clusterIndexFor(l, start.lineCol.X, start.clusterIndex)
-		for ; start.lineCol.X < l.Layout.Runes.Count; start.lineCol.X++ {
-			cluster := l.Layout.Clusters[start.clusterIndex]
-			if start.runes >= cluster.Runes.Offset+cluster.Runes.Count {
-				start.clusterIndex++
-				cluster = l.Layout.Clusters[start.clusterIndex]
-			}
-			if limit != 0 && count == limit {
-				return start, false
-			}
-			count++
-			if positionGreaterOrEqual(lines, start, needle) {
-				return start, true
-			}
-
-			start.x += cluster.RuneWidth()
-			start.runes++
-		}
-		if start.lineCol.Y == len(lines)-1 {
-			// End of file.
-			return start, true
-		}
-
-		prevDesc := l.Descent
-		start.lineCol.Y++
-		start.lineCol.X = 0
-		start.clusterIndex = 0
-		l = lines[start.lineCol.Y]
-		start.x = align(alignment, l.Layout.Direction, l.Width, width)
-		if l.Layout.Direction.Progression() == system.TowardOrigin {
-			start.x += l.Width
-		}
-		start.y += (prevDesc + l.Ascent).Ceil()
-	}
-}
-
-// indexRune returns the latest rune index and byte offset no later than r.
-func (e *Editor) indexRune(r int) offEntry {
-	// Initialize index.
-	if len(e.offIndex) == 0 {
-		e.offIndex = append(e.offIndex, offEntry{})
-	}
-	i := sort.Search(len(e.offIndex), func(i int) bool {
-		entry := e.offIndex[i]
-		return entry.runes >= r
-	})
-	// Return the entry guaranteed to be less than or equal to r.
-	if i > 0 {
-		i--
-	}
-	return e.offIndex[i]
-}
-
-// runeOffset returns the byte offset into e.rr of the r'th rune.
-// r must be a valid rune index, usually returned by closestPosition.
-func (e *Editor) runeOffset(r int) int {
-	const runesPerIndexEntry = 50
-	entry := e.indexRune(r)
-	lastEntry := e.offIndex[len(e.offIndex)-1].runes
-	for entry.runes < r {
-		if entry.runes > lastEntry && entry.runes%runesPerIndexEntry == runesPerIndexEntry-1 {
-			e.offIndex = append(e.offIndex, entry)
-		}
-		_, s := e.rr.runeAt(entry.bytes)
-		entry.bytes += s
-		entry.runes++
-	}
-	return entry.bytes
-}
-
-func (e *Editor) invalidate() {
-	e.index = e.index[:0]
-	e.offIndex = e.offIndex[:0]
-	e.valid = false
-}
-
-// Delete runes from the caret position. The sign of runes specifies the
+// Delete runes from the caret position. The sign of the argument specifies the
 // direction to delete: positive is forward, negative is backward.
 //
-// If there is a selection, it is deleted and counts as a single rune.
-func (e *Editor) Delete(runes int) {
-	if runes == 0 {
-		return
+// If there is a selection, it is deleted and counts as a single grapheme
+// cluster.
+func (e *Editor) Delete(graphemeClusters int) (deletedRunes int) {
+	e.initBuffer()
+	if graphemeClusters == 0 {
+		return 0
 	}
 
-	start := e.caret.start
-	end := e.caret.end
+	start, end := e.text.Selection()
 	if start != end {
-		runes -= sign(runes)
+		graphemeClusters -= sign(graphemeClusters)
 	}
 
-	end += runes
+	// Move caret by the target quantity of clusters.
+	e.text.MoveCaret(0, graphemeClusters)
+	// Get the new rune offsets of the selection.
+	start, end = e.text.Selection()
 	e.replace(start, end, "", true)
-	e.caret.xoff = 0
+	// Reset xoff.
+	e.text.MoveCaret(0, 0)
 	e.ClearSelection()
+	return end - start
 }
 
-// Insert inserts text at the caret, moving the caret forward. If there is a
-// selection, Insert overwrites it.
-func (e *Editor) Insert(s string) {
-	e.append(s)
-	e.caret.scroll = true
-}
-
-// append inserts s at the cursor, leaving the caret is at the end of s. If
-// there is a selection, append overwrites it.
-// xxx|yyy + append zzz => xxxzzz|yyy
-func (e *Editor) append(s string) {
+func (e *Editor) Insert(s string) (insertedRunes int) {
+	e.initBuffer()
 	if e.SingleLine {
 		s = strings.ReplaceAll(s, "\n", " ")
 	}
-	moves := e.replace(e.caret.start, e.caret.end, s, true)
-	e.caret.xoff = 0
-	start := e.caret.start
-	if end := e.caret.end; end < start {
+	start, end := e.text.Selection()
+	moves := e.replace(start, end, s, true)
+	if end < start {
 		start = end
 	}
-	e.caret.start = start + moves
-	e.caret.end = e.caret.start
+	// Reset xoff.
+	e.text.MoveCaret(0, 0)
+	e.SetCaret(start+moves, start+moves)
+	e.scrollCaret = true
+	return moves
 }
 
 // modification represents a change to the contents of the editor buffer.
@@ -1225,9 +866,10 @@ type modification struct {
 
 // undo applies the modification at e.history[e.historyIdx] and decrements
 // e.historyIdx.
-func (e *Editor) undo() {
+func (e *Editor) undo() (EditorEvent, bool) {
+	e.initBuffer()
 	if len(e.history) < 1 || e.nextHistoryIdx == 0 {
-		return
+		return nil, false
 	}
 	mod := e.history[e.nextHistoryIdx-1]
 	replaceEnd := mod.StartRune + utf8.RuneCountInString(mod.ApplyContent)
@@ -1235,13 +877,15 @@ func (e *Editor) undo() {
 	caretEnd := mod.StartRune + utf8.RuneCountInString(mod.ReverseContent)
 	e.SetCaret(caretEnd, mod.StartRune)
 	e.nextHistoryIdx--
+	return ChangeEvent{}, true
 }
 
 // redo applies the modification at e.history[e.historyIdx] and increments
 // e.historyIdx.
-func (e *Editor) redo() {
+func (e *Editor) redo() (EditorEvent, bool) {
+	e.initBuffer()
 	if len(e.history) < 1 || e.nextHistoryIdx == len(e.history) {
-		return
+		return nil, false
 	}
 	mod := e.history[e.nextHistoryIdx]
 	end := mod.StartRune + utf8.RuneCountInString(mod.ReverseContent)
@@ -1249,20 +893,22 @@ func (e *Editor) redo() {
 	caretEnd := mod.StartRune + utf8.RuneCountInString(mod.ApplyContent)
 	e.SetCaret(caretEnd, mod.StartRune)
 	e.nextHistoryIdx++
+	return ChangeEvent{}, true
 }
 
 // replace the text between start and end with s. Indices are in runes.
 // It returns the number of runes inserted.
 // addHistory controls whether this modification is recorded in the undo
-// history.
+// history. replace can modify text in positions unrelated to the cursor
+// position.
 func (e *Editor) replace(start, end int, s string, addHistory bool) int {
+	length := e.text.Len()
 	if start > end {
 		start, end = end, start
 	}
-	startPos := e.closestPosition(combinedPos{runes: start})
-	endPos := e.closestPosition(combinedPos{runes: end})
-	startOff := e.runeOffset(startPos.runes)
-	replaceSize := endPos.runes - startPos.runes
+	start = min(start, length)
+	end = min(end, length)
+	replaceSize := end - start
 	el := e.Len()
 	var sc int
 	idx := 0
@@ -1279,121 +925,51 @@ func (e *Editor) replace(start, end int, s string, addHistory bool) int {
 		idx += n
 		sc++
 	}
-	newEnd := startPos.runes + sc
 
 	if addHistory {
-		e.rr.Seek(int64(startOff), 0)
 		deleted := make([]rune, 0, replaceSize)
+		readPos := e.text.ByteOffset(start)
 		for i := 0; i < replaceSize; i++ {
-			ru, _, _ := e.rr.ReadRune()
+			ru, s, _ := e.text.ReadRuneAt(int64(readPos))
+			readPos += int64(s)
 			deleted = append(deleted, ru)
 		}
 		if e.nextHistoryIdx < len(e.history) {
 			e.history = e.history[:e.nextHistoryIdx]
 		}
 		e.history = append(e.history, modification{
-			StartRune:      startPos.runes,
+			StartRune:      start,
 			ApplyContent:   s,
 			ReverseContent: string(deleted),
 		})
 		e.nextHistoryIdx++
 	}
 
-	e.rr.deleteRunes(startOff, replaceSize)
-	e.rr.prepend(startOff, s)
+	sc = e.text.Replace(start, end, s)
+	newEnd := start + sc
 	adjust := func(pos int) int {
 		switch {
-		case newEnd < pos && pos <= endPos.runes:
+		case newEnd < pos && pos <= end:
 			pos = newEnd
-		case endPos.runes < pos:
-			diff := newEnd - endPos.runes
+		case end < pos:
+			diff := newEnd - end
 			pos = pos + diff
 		}
 		return pos
 	}
-	e.caret.start = adjust(e.caret.start)
-	e.caret.end = adjust(e.caret.end)
 	e.ime.start = adjust(e.ime.start)
 	e.ime.end = adjust(e.ime.end)
-	e.invalidate()
 	return sc
-}
-
-func (e *Editor) movePages(pages int, selAct selectionAction) {
-	caret := e.closestPosition(combinedPos{runes: e.caret.start})
-	x := caret.x + e.caret.xoff
-	y := caret.y + pages*e.viewSize.Y
-	pos := e.closestPosition(combinedPos{x: x, y: y})
-	e.caret.start = pos.runes
-	e.caret.xoff = x - pos.x
-	e.updateSelection(selAct)
 }
 
 // MoveCaret moves the caret (aka selection start) and the selection end
 // relative to their current positions. Positive distances moves forward,
-// negative distances moves backward. Distances are in runes.
+// negative distances moves backward. Distances are in grapheme clusters,
+// which closely match what users perceive as "characters" even when the
+// characters are multiple code points long.
 func (e *Editor) MoveCaret(startDelta, endDelta int) {
-	e.caret.xoff = 0
-	e.caret.start = e.closestPosition(combinedPos{runes: e.caret.start + startDelta}).runes
-	e.caret.end = e.closestPosition(combinedPos{runes: e.caret.end + endDelta}).runes
-}
-
-func (e *Editor) moveStart(selAct selectionAction) {
-	caret := e.closestPosition(combinedPos{runes: e.caret.start})
-	caret = e.closestPosition(combinedPos{lineCol: screenPos{Y: caret.lineCol.Y}})
-	e.caret.start = caret.runes
-	e.caret.xoff = -caret.x
-	e.updateSelection(selAct)
-}
-
-func (e *Editor) moveEnd(selAct selectionAction) {
-	caret := e.closestPosition(combinedPos{runes: e.caret.start})
-	caret = e.closestPosition(combinedPos{lineCol: screenPos{X: maxInt, Y: caret.lineCol.Y}})
-	e.caret.start = caret.runes
-	l := e.lines[caret.lineCol.Y]
-	a := align(e.Alignment, e.locale.Direction, l.Width, e.viewSize.X)
-	e.caret.xoff = l.Width + a - caret.x
-	e.updateSelection(selAct)
-}
-
-// moveWord moves the caret to the next word in the specified direction.
-// Positive is forward, negative is backward.
-// Absolute values greater than one will skip that many words.
-func (e *Editor) moveWord(distance int, selAct selectionAction) {
-	// split the distance information into constituent parts to be
-	// used independently.
-	words, direction := distance, 1
-	if distance < 0 {
-		words, direction = distance*-1, -1
-	}
-	// atEnd if caret is at either side of the buffer.
-	caret := e.closestPosition(combinedPos{runes: e.caret.start})
-	atEnd := func() bool {
-		return caret.runes == 0 || caret.runes == e.Len()
-	}
-	// next returns the appropriate rune given the direction.
-	next := func() (r rune) {
-		off := e.runeOffset(caret.runes)
-		if direction < 0 {
-			r, _ = e.rr.runeBefore(off)
-		} else {
-			r, _ = e.rr.runeAt(off)
-		}
-		return r
-	}
-	for ii := 0; ii < words; ii++ {
-		for r := next(); unicode.IsSpace(r) && !atEnd(); r = next() {
-			e.MoveCaret(direction, 0)
-			caret = e.closestPosition(combinedPos{runes: e.caret.start})
-		}
-		e.MoveCaret(direction, 0)
-		caret = e.closestPosition(combinedPos{runes: e.caret.start})
-		for r := next(); !unicode.IsSpace(r) && !atEnd(); r = next() {
-			e.MoveCaret(direction, 0)
-			caret = e.closestPosition(combinedPos{runes: e.caret.start})
-		}
-	}
-	e.updateSelection(selAct)
+	e.initBuffer()
+	e.text.MoveCaret(startDelta, endDelta)
 }
 
 // deleteWord deletes the next word(s) in the specified direction.
@@ -1401,17 +977,18 @@ func (e *Editor) moveWord(distance int, selAct selectionAction) {
 // Positive is forward, negative is backward.
 // Absolute values greater than one will delete that many words.
 // The selection counts as a single word.
-func (e *Editor) deleteWord(distance int) {
+func (e *Editor) deleteWord(distance int) (deletedRunes int) {
 	if distance == 0 {
 		return
 	}
 
-	if e.caret.start != e.caret.end {
-		e.Delete(1)
+	start, end := e.text.Selection()
+	if start != end {
+		deletedRunes = e.Delete(1)
 		distance -= sign(distance)
 	}
 	if distance == 0 {
-		return
+		return deletedRunes
 	}
 
 	// split the distance information into constituent parts to be
@@ -1420,26 +997,26 @@ func (e *Editor) deleteWord(distance int) {
 	if distance < 0 {
 		words, direction = distance*-1, -1
 	}
+	caret, _ := e.text.Selection()
 	// atEnd if offset is at or beyond either side of the buffer.
-	caret := e.closestPosition(combinedPos{runes: e.caret.start})
 	atEnd := func(runes int) bool {
-		idx := caret.runes + runes*direction
+		idx := caret + runes*direction
 		return idx <= 0 || idx >= e.Len()
 	}
 	// next returns the appropriate rune given the direction and offset in runes).
 	next := func(runes int) rune {
-		idx := caret.runes + runes*direction
+		idx := caret + runes*direction
 		if idx < 0 {
 			idx = 0
 		} else if idx > e.Len() {
 			idx = e.Len()
 		}
-		off := e.runeOffset(idx)
+		off := e.text.ByteOffset(idx)
 		var r rune
 		if direction < 0 {
-			r, _ = e.rr.runeBefore(off)
+			r, _, _ = e.text.ReadRuneBefore(int64(off))
 		} else {
-			r, _ = e.rr.runeAt(off)
+			r, _, _ = e.text.ReadRuneAt(int64(off))
 		}
 		return r
 	}
@@ -1451,102 +1028,69 @@ func (e *Editor) deleteWord(distance int) {
 			runes += 1
 		}
 	}
-	e.Delete(runes * direction)
-}
-
-func (e *Editor) scrollToCaret() {
-	caret := e.closestPosition(combinedPos{runes: e.caret.start})
-	l := e.lines[caret.lineCol.Y]
-	if e.SingleLine {
-		var dist int
-		if d := caret.x.Floor() - e.scrollOff.X; d < 0 {
-			dist = d
-		} else if d := caret.x.Ceil() - (e.scrollOff.X + e.viewSize.X); d > 0 {
-			dist = d
-		}
-		e.scrollRel(dist, 0)
-	} else {
-		miny := caret.y - l.Ascent.Ceil()
-		maxy := caret.y + l.Descent.Ceil()
-		var dist int
-		if d := miny - e.scrollOff.Y; d < 0 {
-			dist = d
-		} else if d := maxy - (e.scrollOff.Y + e.viewSize.Y); d > 0 {
-			dist = d
-		}
-		e.scrollRel(0, dist)
-	}
-}
-
-// NumLines returns the number of lines in the editor.
-func (e *Editor) NumLines() int {
-	e.makeValid()
-	return len(e.lines)
+	deletedRunes += e.Delete(runes * direction)
+	return deletedRunes
 }
 
 // SelectionLen returns the length of the selection, in runes; it is
 // equivalent to utf8.RuneCountInString(e.SelectedText()).
 func (e *Editor) SelectionLen() int {
-	return abs(e.caret.start - e.caret.end)
+	e.initBuffer()
+	return e.text.SelectionLen()
 }
 
 // Selection returns the start and end of the selection, as rune offsets.
 // start can be > end.
 func (e *Editor) Selection() (start, end int) {
-	return e.caret.start, e.caret.end
+	e.initBuffer()
+	return e.text.Selection()
 }
 
 // SetCaret moves the caret to start, and sets the selection end to end. start
 // and end are in runes, and represent offsets into the editor text.
 func (e *Editor) SetCaret(start, end int) {
-	e.caret.start = e.closestPosition(combinedPos{runes: start}).runes
-	e.caret.end = e.closestPosition(combinedPos{runes: end}).runes
-	e.caret.scroll = true
+	e.initBuffer()
+	e.text.SetCaret(start, end)
+	e.scrollCaret = true
 	e.scroller.Stop()
 }
 
 // SelectedText returns the currently selected text (if any) from the editor.
 func (e *Editor) SelectedText() string {
-	startOff := e.runeOffset(e.caret.start)
-	endOff := e.runeOffset(e.caret.end)
-	start := min(startOff, endOff)
-	end := max(startOff, endOff)
-	buf := make([]byte, end-start)
-	e.rr.Seek(int64(start), io.SeekStart)
-	_, err := e.rr.Read(buf)
-	if err != nil {
-		// The only error that rr.Read can return is EOF, which just means no
-		// selection, but we've already made sure that shouldn't happen.
-		panic("impossible error because end is before e.rr.Len()")
-	}
-	return string(buf)
-}
-
-func (e *Editor) updateSelection(selAct selectionAction) {
-	if selAct == selectionClear {
-		e.ClearSelection()
-	}
+	e.initBuffer()
+	e.scratch = e.text.SelectedText(e.scratch)
+	return string(e.scratch)
 }
 
 // ClearSelection clears the selection, by setting the selection end equal to
 // the selection start.
 func (e *Editor) ClearSelection() {
-	e.caret.end = e.caret.start
+	e.initBuffer()
+	e.text.ClearSelection()
 }
 
 // WriteTo implements io.WriterTo.
 func (e *Editor) WriteTo(w io.Writer) (int64, error) {
-	return e.rr.WriteTo(w)
+	e.initBuffer()
+	return e.text.WriteTo(w)
 }
 
 // Seek implements io.Seeker.
 func (e *Editor) Seek(offset int64, whence int) (int64, error) {
-	return e.rr.Seek(offset, io.SeekStart)
+	e.initBuffer()
+	return e.text.Seek(offset, whence)
 }
 
 // Read implements io.Reader.
 func (e *Editor) Read(p []byte) (int, error) {
-	return e.rr.Read(p)
+	e.initBuffer()
+	return e.text.Read(p)
+}
+
+// Regions returns visible regions covering the rune range [start,end).
+func (e *Editor) Regions(start, end int, regions []Region) []Region {
+	e.initBuffer()
+	return e.text.Regions(start, end, regions)
 }
 
 func max(a, b int) int {
@@ -1579,36 +1123,6 @@ func sign(n int) int {
 	default:
 		return 0
 	}
-}
-
-func nullLayout(rr io.RuneReader) ([]text.Line, error) {
-	var rerr error
-	var n int
-	var buf bytes.Buffer
-	for {
-		r, _, err := rr.ReadRune()
-		if err != nil {
-			rerr = err
-			break
-		}
-		n++
-		buf.WriteRune(r)
-	}
-	clusters := make([]text.GlyphCluster, n)
-	for i := range clusters {
-		clusters[i].Runes.Count = 1
-		clusters[i].Runes.Offset = i
-	}
-	return []text.Line{
-		{
-			Layout: text.Layout{
-				Clusters: clusters,
-				Runes: text.Range{
-					Count: n,
-				},
-			},
-		},
-	}, rerr
 }
 
 func (s ChangeEvent) isEditorEvent() {}

@@ -29,8 +29,8 @@ type Scrollbar struct {
 	oldDragPos float32
 }
 
-// Layout updates the internal state of the scrollbar based on events
-// since the previous call to Layout. The provided axis will be used to
+// Update updates the internal state of the scrollbar based on events
+// since the previous call to Update. The provided axis will be used to
 // normalize input event coordinates and constraints into an axis-
 // independent format. viewportStart is the position of the beginning
 // of the scrollable viewport relative to the underlying content expressed
@@ -39,7 +39,7 @@ type Scrollbar struct {
 // as a value in the range [0,1]. For example, if viewportStart is 0.25
 // and viewportEnd is .5, the viewport described by the scrollbar is
 // currently showing the second quarter of the underlying content.
-func (s *Scrollbar) Layout(gtx layout.Context, axis layout.Axis, viewportStart, viewportEnd float32) layout.Dimensions {
+func (s *Scrollbar) Update(gtx layout.Context, axis layout.Axis, viewportStart, viewportEnd float32) {
 	// Calculate the length of the major axis of the scrollbar. This is
 	// the length of the track within which pointer events occur, and is
 	// used to scale those interactions.
@@ -61,8 +61,12 @@ func (s *Scrollbar) Layout(gtx layout.Context, axis layout.Axis, viewportStart, 
 	}
 
 	// Jump to a click in the track.
-	for _, event := range s.track.Events(gtx) {
-		if event.Type != gesture.TypeClick ||
+	for {
+		event, ok := s.track.Update(gtx.Source)
+		if !ok {
+			break
+		}
+		if event.Kind != gesture.KindClick ||
 			event.Modifiers != key.Modifiers(0) ||
 			event.NumClicks > 1 {
 			continue
@@ -80,8 +84,12 @@ func (s *Scrollbar) Layout(gtx layout.Context, axis layout.Axis, viewportStart, 
 	}
 
 	// Offset to account for any drags.
-	for _, event := range s.drag.Events(gtx.Metric, gtx, gesture.Axis(axis)) {
-		switch event.Type {
+	for {
+		event, ok := s.drag.Update(gtx.Metric, gtx.Source, gesture.Axis(axis))
+		if !ok {
+			break
+		}
+		switch event.Kind {
 		case pointer.Drag:
 		case pointer.Release, pointer.Cancel:
 			s.dragging = false
@@ -136,9 +144,11 @@ func (s *Scrollbar) Layout(gtx layout.Context, axis layout.Axis, viewportStart, 
 
 	// Process events from the indicator so that hover is
 	// detected properly.
-	_ = s.indicator.Events(gtx)
-
-	return layout.Dimensions{}
+	for {
+		if _, ok := s.indicator.Update(gtx.Source); !ok {
+			break
+		}
+	}
 }
 
 // AddTrack configures the track click listener for the scrollbar to use
@@ -159,16 +169,30 @@ func (s *Scrollbar) AddDrag(ops *op.Ops) {
 	s.drag.Add(ops)
 }
 
-// IndicatorHovered returns whether the scroll indicator is currently being
+// IndicatorHovered reports whether the scroll indicator is currently being
 // hovered by the pointer.
 func (s *Scrollbar) IndicatorHovered() bool {
 	return s.indicator.Hovered()
+}
+
+// TrackHovered reports whether the scroll track is being hovered by the
+// pointer.
+func (s *Scrollbar) TrackHovered() bool {
+	return s.track.Hovered()
 }
 
 // ScrollDistance returns the normalized distance that the scrollbar
 // moved during the last call to Layout as a value in the range [-1,1].
 func (s *Scrollbar) ScrollDistance() float32 {
 	return s.delta
+}
+
+// Dragging reports whether the user is currently performing a drag gesture
+// on the indicator. Note that this can return false while ScrollDistance is nonzero
+// if the user scrolls using a different control than the scrollbar (like a mouse
+// wheel).
+func (s *Scrollbar) Dragging() bool {
+	return s.dragging
 }
 
 // List holds the persistent state for a layout.List that has a

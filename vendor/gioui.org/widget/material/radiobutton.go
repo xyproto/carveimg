@@ -17,7 +17,7 @@ type RadioButtonStyle struct {
 // RadioButton returns a RadioButton with a label. The key specifies
 // the value for the Enum.
 func RadioButton(th *Theme, group *widget.Enum, key, label string) RadioButtonStyle {
-	return RadioButtonStyle{
+	r := RadioButtonStyle{
 		Group: group,
 		checkable: checkable{
 			Label: label,
@@ -32,10 +32,13 @@ func RadioButton(th *Theme, group *widget.Enum, key, label string) RadioButtonSt
 		},
 		Key: key,
 	}
+	r.checkable.Font.Typeface = th.Face
+	return r
 }
 
 // Layout updates enum and displays the radio button.
 func (r RadioButtonStyle) Layout(gtx layout.Context) layout.Dimensions {
+	r.Group.Update(gtx)
 	hovered, hovering := r.Group.Hovered()
 	focus, focused := r.Group.Focused()
 	return r.Group.Layout(gtx, r.Key, func(gtx layout.Context) layout.Dimensions {

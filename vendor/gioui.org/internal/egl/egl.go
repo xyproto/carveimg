@@ -15,10 +15,9 @@ import (
 )
 
 type Context struct {
-	disp          _EGLDisplay
-	eglCtx        *eglContext
-	eglSurf       _EGLSurface
-	width, height int
+	disp    _EGLDisplay
+	eglCtx  *eglContext
+	eglSurf _EGLSurface
 }
 
 type eglContext struct {
@@ -62,6 +61,7 @@ func (c *Context) Release() {
 		eglDestroyContext(c.disp, c.eglCtx.ctx)
 		c.eglCtx = nil
 	}
+	eglTerminate(c.disp)
 	c.disp = nilEGLDisplay
 }
 
@@ -120,11 +120,9 @@ func (c *Context) VisualID() int {
 	return c.eglCtx.visualID
 }
 
-func (c *Context) CreateSurface(win NativeWindowType, width, height int) error {
+func (c *Context) CreateSurface(win NativeWindowType) error {
 	eglSurf, err := createSurface(c.disp, c.eglCtx, win)
 	c.eglSurf = eglSurf
-	c.width = width
-	c.height = height
 	return err
 }
 

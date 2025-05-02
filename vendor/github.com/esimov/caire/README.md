@@ -3,13 +3,13 @@
 [![build](https://github.com/esimov/caire/actions/workflows/build.yml/badge.svg)](https://github.com/esimov/caire/actions/workflows/build.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/esimov/caire.svg)](https://pkg.go.dev/github.com/esimov/caire)
 [![license](https://img.shields.io/github/license/esimov/caire)](./LICENSE)
-[![release](https://img.shields.io/badge/release-v1.4.4-blue.svg)](https://github.com/esimov/caire/releases/tag/v1.4.4)
-[![homebrew](https://img.shields.io/badge/homebrew-v1.4.4-orange.svg)](https://formulae.brew.sh/formula/caire)
+[![release](https://img.shields.io/badge/release-v1.4.6-blue.svg)](https://github.com/esimov/caire/releases/tag/v1.4.6)
+[![homebrew](https://img.shields.io/badge/homebrew-v1.4.6-orange.svg)](https://formulae.brew.sh/formula/caire)
 [![caire](https://snapcraft.io/caire/badge.svg)](https://snapcraft.io/caire)
 
 **Caire** is a content aware image resize library based on *[Seam Carving for Content-Aware Image Resizing](https://inst.eecs.berkeley.edu/~cs194-26/fa16/hw/proj4-seamcarving/imret.pdf)* paper.
 
-### How does it work
+## How does it work
 * An energy map (edge detection) is generated from the provided image.
 * The algorithm tries to find the least important parts of the image taking into account the lowest energy values.
 * Using a dynamic programming approach the algorithm will generate individual seams across the image from top to down, or from left to right (depending on the horizontal or vertical resizing) and will allocate for each seam a custom value, the least important pixels having the lowest energy cost and the most important ones having the highest cost.
@@ -33,7 +33,7 @@ Key features which differentiates this library from the other existing open sour
 - [x] Support for both shrinking or enlarging the image
 - [x] Resize image both vertically and horizontally
 - [x] Face detection to avoid face deformation
-- [x] Support for multiple output image type (jpg, jpeg, png, bmp, gif)
+- [x] Support for multiple output image type (jpg, jpeg, png, bmp)
 - [x] Support for `stdin` and `stdout` pipe commands
 - [x] Can process whole directories recursively and concurrently
 - [x] Use of sobel threshold for fine tuning
@@ -42,12 +42,13 @@ Key features which differentiates this library from the other existing open sour
 - [x] Support for proportional scaling
 - [x] Support for protective mask
 - [x] Support for removal mask
+- [x] [GUI debug mode support](#masks-support)
 
 ## Install
 First, install Go, set your `GOPATH`, and make sure `$GOPATH/bin` is on your `PATH`.
 
 ```bash
-$ go install github.com/esimov/caire/cmd/caire@latest 
+$ go install github.com/esimov/caire/cmd/caire@latest
 ```
 
 ## MacOS (Brew) install
@@ -85,7 +86,7 @@ The following flags are supported:
 | `angle` | float | Plane rotated faces angle |
 | `mask` | string | Mask file path |
 | `rmask` | string | Remove mask file path |
-| `col` | string | Seam color (default `#ff0000`) |
+| `color` | string | Seam color (default `#ff0000`) |
 | `shape` | string | Shape type used for debugging: `circle`,`line` (default `circle`) |
 
 ## Face detection
@@ -104,7 +105,7 @@ The image below illustrates the application capabilities for human face detectio
 
 <p align="center"><img alt="GUI preview" title="GUI preview" src="https://github.com/esimov/caire/raw/master/gui_preview.gif"></p>
 
-A GUI preview mode is also incorporated into the library for in time process visualization. The Gio GUI library has been used because of its robustness and modern architecture. Prior running it please make sure that you have installed all the required dependencies noted in the installation section (https://gioui.org/#installation) .
+A GUI preview mode is also incorporated into the library for in time process visualization. The [Gio](http://gioui.org/) GUI library has been used because of its robustness and modern architecture. Prior running it please make sure that you have installed all the required dependencies noted in the installation section (https://gioui.org/#installation) .
 
 The preview window is activated by default but you can deactivate it any time by setting the `-preview` flag to false. When the images are processed concurrently from a directory the preview mode is deactivated.
 
@@ -146,7 +147,7 @@ $ caire -in <input_folder> -out <output-folder>
 ```
 
 ### Support for multiple output image type
-There is no need to define the output file type, just use the correct extension and the library will encode the image to that specific type. You can export the resized image even to a **Gif** file, in which case the generated file shows the resizing process interactively.
+There is no need to define the output file type, just use the correct extension and the library will encode the image to that specific type.
 
 ### Other options
 In case you wish to scale down the image by a specific percentage, it can be used the **`-perc`** boolean flag. In this case the values provided for the `width` and `height` are expressed in percentage and not pixel values. For example to reduce the image dimension by 20% both horizontally and vertically you can use the following command:
@@ -159,17 +160,20 @@ Also the library supports the **`-square`** option. When this option is used the
 
 When an image is resized on both the X and Y axis, the algorithm will first try to rescale it prior resizing, but also will preserve the image aspect ratio. The seam carving algorithm is applied only to the remaining points. Ex. : given an image of dimensions 2048x1536 if we want to resize to the 1024x500, the tool first rescale the image to 1024x768 and then will remove only the remaining 268px.
 
-#### Masks support:
+### Masks support:
 
 - `-mask`: The path to the protective mask. The mask should be in binary format and have the same size as the input image. White areas represent regions where no seams should be carved.
 - `-rmask`: The path to the removal mask. The mask should be in binary format and have the same size as the input image. White areas represent regions to be removed.
+
+Mask | Mask removal
+:-: | :-:
+<video src='https://user-images.githubusercontent.com/883386/197509861-86733da8-0846-419a-95eb-4fb5a97607d5.mp4' width=180/> | <video src='https://user-images.githubusercontent.com/883386/197397857-7b785d7c-2f80-4aed-a5d2-75c429389060.mp4' width=180/>
 
 ### Caire integrations
 - [x] Caire can be used as a serverless function via OpenFaaS: https://github.com/esimov/caire-openfaas
 - [x] Caire can also be used as a `snap` function (https://snapcraft.io/caire): `$ snap run caire --h`
 
 <a href="https://snapcraft.io/caire"><img src="https://raw.githubusercontent.com/snapcore/snap-store-badges/master/EN/%5BEN%5D-snap-store-white-uneditable.png" alt="snapcraft caire"></a>
-
 
 ## Results
 

@@ -14,7 +14,7 @@ type CheckBoxStyle struct {
 }
 
 func CheckBox(th *Theme, checkBox *widget.Bool, label string) CheckBoxStyle {
-	return CheckBoxStyle{
+	c := CheckBoxStyle{
 		CheckBox: checkBox,
 		checkable: checkable{
 			Label:              label,
@@ -27,12 +27,14 @@ func CheckBox(th *Theme, checkBox *widget.Bool, label string) CheckBoxStyle {
 			uncheckedStateIcon: th.Icon.CheckBoxUnchecked,
 		},
 	}
+	c.checkable.Font.Typeface = th.Face
+	return c
 }
 
 // Layout updates the checkBox and displays it.
 func (c CheckBoxStyle) Layout(gtx layout.Context) layout.Dimensions {
 	return c.CheckBox.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		semantic.CheckBox.Add(gtx.Ops)
-		return c.layout(gtx, c.CheckBox.Value, c.CheckBox.Hovered() || c.CheckBox.Focused())
+		return c.layout(gtx, c.CheckBox.Value, c.CheckBox.Hovered() || gtx.Focused(c.CheckBox))
 	})
 }

@@ -7,6 +7,7 @@ import (
 
 	"golang.org/x/exp/shiny/materialdesign/icons"
 
+	"gioui.org/font"
 	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget"
@@ -31,8 +32,11 @@ type Palette struct {
 	ContrastFg color.NRGBA
 }
 
+// Theme holds the general theme of an app or window. Different top-level
+// windows should have different instances of Theme (with different Shapers;
+// see the godoc for [text.Shaper]), though their other fields can be equal.
 type Theme struct {
-	Shaper text.Shaper
+	Shaper *text.Shaper
 	Palette
 	TextSize unit.Sp
 	Icon     struct {
@@ -41,15 +45,16 @@ type Theme struct {
 		RadioChecked      *widget.Icon
 		RadioUnchecked    *widget.Icon
 	}
+	// Face selects the default typeface for text.
+	Face font.Typeface
 
 	// FingerSize is the minimum touch target size.
 	FingerSize unit.Dp
 }
 
-func NewTheme(fontCollection []text.FontFace) *Theme {
-	t := &Theme{
-		Shaper: text.NewCache(fontCollection),
-	}
+// NewTheme constructs a theme (and underlying text shaper).
+func NewTheme() *Theme {
+	t := &Theme{Shaper: &text.Shaper{}}
 	t.Palette = Palette{
 		Fg:         rgb(0x000000),
 		Bg:         rgb(0xffffff),

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Unlicense OR MIT
 
-//go:build ((linux && !android) || freebsd || openbsd) && !nox11
+//go:build ((linux && !android) || freebsd || openbsd) && !nox11 && !noopengl
 // +build linux,!android freebsd openbsd
 // +build !nox11
+// +build !noopengl
 
 package app
 
@@ -24,6 +25,18 @@ func init() {
 		if err != nil {
 			return nil, err
 		}
+		win, _, _ := w.window()
+		eglSurf := egl.NativeWindowType(uintptr(win))
+		if err := ctx.CreateSurface(eglSurf); err != nil {
+			ctx.Release()
+			return nil, err
+		}
+		if err := ctx.MakeCurrent(); err != nil {
+			ctx.Release()
+			return nil, err
+		}
+		defer ctx.ReleaseCurrent()
+		ctx.EnableVSync(true)
 		return &x11Context{win: w, Context: ctx}, nil
 	}
 }
@@ -36,17 +49,6 @@ func (c *x11Context) Release() {
 }
 
 func (c *x11Context) Refresh() error {
-	c.Context.ReleaseSurface()
-	win, width, height := c.win.window()
-	eglSurf := egl.NativeWindowType(uintptr(win))
-	if err := c.Context.CreateSurface(eglSurf, width, height); err != nil {
-		return err
-	}
-	if err := c.Context.MakeCurrent(); err != nil {
-		return err
-	}
-	c.Context.EnableVSync(true)
-	c.Context.ReleaseCurrent()
 	return nil
 }
 
